@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rosen"
+version = "0.1.0"
+description = "Explicit PyTorch framework for multi-scenario recommendation experiments"
+readme = "README.md"
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    "torch>=2.0,<3", "numpy>=1.24,<2", "polars>=1.36.1,<2",
+    "pyarrow>=21,<22", "pandas>=2,<3", "scipy>=1.11,<2",
+    "scikit-learn>=1.6,<2", "duckdb>=1.5.4,<2", "psutil>=5.9,<8",
+    "matplotlib>=3.7,<4", "pillow>=10,<12", "six>=1.16,<2",
+]
+
+[project.optional-dependencies]
+vision = ["torchvision>=0.15,<1"]
+
+[dependency-groups]
+dev = ["pytest>=8,<9"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["rosen", "rosen.*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+# Keep the core and KR test packages from colliding under the name "tests".
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+testpaths = ["tests", "workspace/kr_time_budget/tests"]

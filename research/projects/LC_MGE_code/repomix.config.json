@@ -1,0 +1,52 @@
+{
+  "output": {
+    "filePath": "repomix-output.md",
+    "style": "markdown",
+    "parsableStyle": true,
+    "headerText": "LC_MGE core code. Start with CORE_CODE.md. The LC implementation includes its training/input/model dependencies; the two related versions include model.py and config.py for comparison only. Code bodies, comments, and interior blank lines are preserved; Repomix normalizes boundary whitespace.",
+    "fileSummary": true,
+    "directoryStructure": true,
+    "removeComments": false,
+    "removeEmptyLines": false,
+    "compress": false,
+    "git": {
+      "sortByChanges": false
+    }
+  },
+  "include": [
+    "README.md",
+    "CORE_CODE.md",
+    "repomix.config.json",
+    "rerank_model_dir/MultiG_E_Submodularity_Model_lc/config.py",
+    "rerank_model_dir/MultiG_E_Submodularity_Model_lc/data_input.py",
+    "rerank_model_dir/MultiG_E_Submodularity_Model_lc/layers.py",
+    "rerank_model_dir/MultiG_E_Submodularity_Model_lc/main.py",
+    "rerank_model_dir/MultiG_E_Submodularity_Model_lc/model.py",
+    "rerank_model_dir/MultiG_E_Submodularity_Model_lc/tools.py",
+    "rerank_model_dir/MultiG_E_Submodularity_Model_lc/util.py",
+    "rerank_model_dir/MultiG_E_Submodularity_Model_lc/run.sh",
+    "rerank_model_dir/MultiG_E_model/config.py",
+    "rerank_model_dir/MultiG_E_model/model.py",
+    "rerank_model_dir/MultiG_E_Submodularity_Model/config.py",
+    "rerank_model_dir/MultiG_E_Submodularity_Model/model.py"
+  ],
+  "ignore": {
+    "useGitignore": false,
+    "useDotIgnore": false,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "**/__pycache__/**",
+      "**/*.pyc",
+      "**/.DS_Store",
+      "**/avg_std/**",
+      "**/model/**",
+      "**/log*",
+      "**/*.zip",
+      "rerank_model_dir/rm.md",
+      "repomix-output.*"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}

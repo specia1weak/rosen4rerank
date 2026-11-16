@@ -1,0 +1,63 @@
+{
+  "output": {
+    "filePath": "docs/rosen/repomix/rosen-core.md",
+    "style": "markdown",
+    "parsableStyle": true,
+    "headerText": "rosen 核心数据流源码阅读包。先读 docs/rosen/repomix/README.md。入选源码全文保留，不压缩、不删除注释或空行；文件首尾空白可能由 Repomix 规范化。仅解释 rosen 当前实现，不包含 HAC 源码或移植方案。",
+    "fileSummary": true,
+    "directoryStructure": true,
+    "removeComments": false,
+    "removeEmptyLines": false,
+    "compress": false,
+    "git": {
+      "sortByChanges": false
+    }
+  },
+  "include": [
+    "docs/rosen/repomix/README.md",
+    "docs/rosen/repomix/repomix.config.json",
+    "pyproject.toml",
+    "src/rosen/__init__.py",
+    "src/rosen/core/enum_type.py",
+    "src/rosen/core/interaction.py",
+    "src/rosen/emb/*.py",
+    "src/rosen/emb/schema/*.py",
+    "src/rosen/data/*.py",
+    "src/rosen/core/train/*.py",
+    "src/rosen/core/trainers/*.py",
+    "src/rosen/evaluate/*.py",
+    "src/rosen/experiment/__init__.py",
+    "src/rosen/experiment/config.py",
+    "src/rosen/experiment/param.py",
+    "src/rosen/models/base.py",
+    "src/rosen/models/msr/__init__.py",
+    "src/rosen/models/msr/base.py",
+    "src/rosen/models/msr/sharedbottom.py",
+    "src/rosen/models/msr/components/__init__.py",
+    "src/rosen/models/msr/components/heads.py",
+    "src/rosen/models/msr/components/codebook.py",
+    "src/rosen/models/utils/activation.py",
+    "src/rosen/models/utils/common.py",
+    "src/rosen/models/utils/container.py",
+    "src/rosen/models/utils/general.py",
+    "src/rosen/utils/observatory/port.py",
+    "src/rosen/utils/shuffle.py",
+    "src/rosen/utils/sort.py",
+    "src/rosen/utils/sequential.py",
+    "src/rosen/utils/optimize.py"
+  ],
+  "ignore": {
+    "useGitignore": false,
+    "useDotIgnore": false,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "**/__pycache__/**",
+      "**/*.pyc",
+      "**/.DS_Store",
+      "docs/rosen/repomix/rosen-core.md"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}

@@ -1,0 +1,182 @@
+[
+  {
+    "seed": 2026,
+    "score": "mixture_step_pace/content_stay",
+    "target": "req_idx_raw",
+    "spearman": 0.3421172822016871
+  },
+  {
+    "seed": 2027,
+    "score": "mixture_step_pace/content_stay",
+    "target": "req_idx_raw",
+    "spearman": 0.34123178440157875
+  },
+  {
+    "seed": 2028,
+    "score": "mixture_step_pace/content_stay",
+    "target": "req_idx_raw",
+    "spearman": 0.33792664869192174
+  },
+  {
+    "seed": 2026,
+    "score": "mixture_step_pace/content_stay",
+    "target": "elapsed_min_raw",
+    "spearman": -0.025736768238790845
+  },
+  {
+    "seed": 2027,
+    "score": "mixture_step_pace/content_stay",
+    "target": "elapsed_min_raw",
+    "spearman": -0.022454153075764507
+  },
+  {
+    "seed": 2028,
+    "score": "mixture_step_pace/content_stay",
+    "target": "elapsed_min_raw",
+    "spearman": -0.02647742414583124
+  },
+  {
+    "seed": 2026,
+    "score": "mixture_step_pace/gamma",
+    "target": "req_idx_raw",
+    "spearman": 0.7456788471178248
+  },
+  {
+    "seed": 2027,
+    "score": "mixture_step_pace/gamma",
+    "target": "req_idx_raw",
+    "spearman": 0.7476063115207925
+  },
+  {
+    "seed": 2028,
+    "score": "mixture_step_pace/gamma",
+    "target": "req_idx_raw",
+    "spearman": 0.7597951142208352
+  },
+  {
+    "seed": 2026,
+    "score": "mixture_step_pace/gamma",
+    "target": "elapsed_min_raw",
+    "spearman": 0.505002083468604
+  },
+  {
+    "seed": 2027,
+    "score": "mixture_step_pace/gamma",
+    "target": "elapsed_min_raw",
+    "spearman": 0.5098617951083001
+  },
+  {
+    "seed": 2028,
+    "score": "mixture_step_pace/gamma",
+    "target": "elapsed_min_raw",
+    "spearman": 0.5223544719754123
+  },
+  {
+    "seed": 2026,
+    "score": "mixture_step_pace/log_survival",
+    "target": "req_idx_raw",
+    "spearman": -0.7530076021198281
+  },
+  {
+    "seed": 2027,
+    "score": "mixture_step_pace/log_survival",
+    "target": "req_idx_raw",
+    "spearman": -0.7576182305212583
+  },
+  {
+    "seed": 2028,
+    "score": "mixture_step_pace/log_survival",
+    "target": "req_idx_raw",
+    "spearman": -0.758130251469439
+  },
+  {
+    "seed": 2026,
+    "score": "mixture_step_pace/log_survival",
+    "target": "elapsed_min_raw",
+    "spearman": -0.6574729481748863
+  },
+  {
+    "seed": 2027,
+    "score": "mixture_step_pace/log_survival",
+    "target": "elapsed_min_raw",
+    "spearman": -0.6586361236488673
+  },
+  {
+    "seed": 2028,
+    "score": "mixture_step_pace/log_survival",
+    "target": "elapsed_min_raw",
+    "spearman": -0.6595996511111607
+  },
+  {
+    "seed": 2026,
+    "score": "mixture_step_pace/prediction",
+    "target": "req_idx_raw",
+    "spearman": 0.6376448972407415
+  },
+  {
+    "seed": 2027,
+    "score": "mixture_step_pace/prediction",
+    "target": "req_idx_raw",
+    "spearman": 0.6444764484894513
+  },
+  {
+    "seed": 2028,
+    "score": "mixture_step_pace/prediction",
+    "target": "req_idx_raw",
+    "spearman": 0.6489758290743276
+  },
+  {
+    "seed": 2026,
+    "score": "mixture_step_pace/prediction",
+    "target": "elapsed_min_raw",
+    "spearman": 0.27954559000146373
+  },
+  {
+    "seed": 2027,
+    "score": "mixture_step_pace/prediction",
+    "target": "elapsed_min_raw",
+    "spearman": 0.2906508674863539
+  },
+  {
+    "seed": 2028,
+    "score": "mixture_step_pace/prediction",
+    "target": "elapsed_min_raw",
+    "spearman": 0.2953522621504705
+  },
+  {
+    "seed": 2026,
+    "score": "fusion/prediction",
+    "target": "req_idx_raw",
+    "spearman": 0.6901106696593191
+  },
+  {
+    "seed": 2027,
+    "score": "fusion/prediction",
+    "target": "req_idx_raw",
+    "spearman": 0.6777411607011263
+  },
+  {
+    "seed": 2028,
+    "score": "fusion/prediction",
+    "target": "req_idx_raw",
+    "spearman": 0.6731670877899162
+  },
+  {
+    "seed": 2026,
+    "score": "fusion/prediction",
+    "target": "elapsed_min_raw",
+    "spearman": 0.3160160636568709
+  },
+  {
+    "seed": 2027,
+    "score": "fusion/prediction",
+    "target": "elapsed_min_raw",
+    "spearman": 0.29405489362619874
+  },
+  {
+    "seed": 2028,
+    "score": "fusion/prediction",
+    "target": "elapsed_min_raw",
+    "spearman": 0.2951875327061187
+  }
+]

@@ -1,0 +1,144 @@
+{
+  "scope": "文档归档与Markdown链接修复；不修改Python源码、数据、run或历史审阅包中的代码块",
+  "moves": [
+    {
+      "from": "决策报告.md",
+      "to": "回复/4.特征集敲定/决策报告.md",
+      "source_sha256": "00e228df1b1b05b41e95eb7c76dffc5c5d0fa5ebee58de6a0674051091195da8"
+    },
+    {
+      "from": "执行报告.md",
+      "to": "回复/6/执行报告.md",
+      "source_sha256": "62d851d26b9ff29450129bc8ec0175ece2d97c8f4bde1f2924237598ac3fa6a0"
+    },
+    {
+      "from": "复现说明.md",
+      "to": "回复/6/复现说明.md",
+      "source_sha256": "41f2dc198a74e67c57f249081420fbd69e9a6acfd9e42d3dcf80aa1dfc880256"
+    },
+    {
+      "from": "数据流调试.md",
+      "to": "回复/6/数据流调试.md",
+      "source_sha256": "c8f59a8810a0705c9a51eb20e9d6cda12ee90d9a01b2f24c1f3835678678a17f"
+    },
+    {
+      "from": "v5五项代码意见核查.md",
+      "to": "回复/7决策关键路口/v5五项代码意见核查.md",
+      "source_sha256": "9576f62da1e89b17a48d046a48b0fdf2839edc60b0c552d1d594e6a42dcfdb66"
+    },
+    {
+      "from": "7决策审阅.md",
+      "to": "回复/7决策关键路口/7决策审阅.md",
+      "source_sha256": "66b3647c841765a1e7119e508bf5a93fa717e3899cd1d22ce97606b5cde479e0"
+    },
+    {
+      "from": "7探路实验报告.md",
+      "to": "回复/7决策关键路口/7探路实验报告.md",
+      "source_sha256": "a2ddfa35798c648334b9acdb86049fb965a1e3e2d91d328a61b80de97d23ab33"
+    },
+    {
+      "from": "特征分类.md",
+      "to": "回复/8推倒重来/特征分类.md",
+      "source_sha256": "f6172ae47ddd7d0e9be4423159ce46806982a354e9bedaaf0194946638cdb237"
+    },
+    {
+      "from": "Omni模型设计.md",
+      "to": "回复/8推倒重来/Omni模型设计.md",
+      "source_sha256": "672fe4f9bfc75984a37de8b129b0295ab1f21f3d3107a9c62ef5837032bfcb61"
+    },
+    {
+      "from": "联合训练报告.md",
+      "to": "回复/8推倒重来/联合训练报告.md",
+      "source_sha256": "4b42718e7dae377df11da7cea5bf8c58636fc68767afb748171527e286fa4c29"
+    },
+    {
+      "from": "双分支实验说明.md",
+      "to": "回复/9继续双分支/双分支实验说明.md",
+      "source_sha256": "6c50cfeb4fadd40c2ba31e6f4ac888b8ca3406030125c040fb79c32b759998be"
+    },
+    {
+      "from": "双分支实验报告.md",
+      "to": "回复/9继续双分支/双分支实验报告.md",
+      "source_sha256": "e0cc9e126981a18aa48258b2a59e9d290fed82fd00020f4a57631cd2a05f2c98"
+    },
+    {
+      "from": "history/20261116_kr-time-budget-v2.md",
+      "to": "回复/历史归档/20261116_kr-time-budget-v2.md",
+      "source_sha256": "e73fbbe5b84ec4209a445796623d89e21ec9d990a65c6ade4bb8acf73fdcd322"
+    },
+    {
+      "from": "history/20261116_kr-time-budget-v2-report.md",
+      "to": "回复/历史归档/20261116_kr-time-budget-v2-report.md",
+      "source_sha256": "99641c1a2cce78388128e35ac5d9dd7b69ba41843a29752ce263be1741dd2f98"
+    },
+    {
+      "from": "history/20261116_kr-time-budget-v4-report.md",
+      "to": "回复/历史归档/20261116_kr-time-budget-v4-report.md",
+      "source_sha256": "78ab90aa09a7c63b7635b0c790af9e857e8203338fd66486e9cb1090e0d8e3b8"
+    },
+    {
+      "from": "history/20261116_kr-time-budget-v3-report.md",
+      "to": "回复/历史归档/20261116_kr-time-budget-v3-report.md",
+      "source_sha256": "6bd5b42acf333c7021d88701fda65d1e6b69d6491590bcc978df7fa7e7240fa8"
+    },
+    {
+      "from": "history/README-v1.md",
+      "to": "回复/历史归档/README-v1.md",
+      "source_sha256": "1a6a6890e8e72066917d6c78dce5dcbd73562173966dddb56ed65fcf24cb83d4"
+    },
+    {
+      "from": "history/20261116_kr-time-budget-argon-report.md",
+      "to": "回复/历史归档/20261116_kr-time-budget-argon-report.md",
+      "source_sha256": "7855768c59bb66fdac897e4365fde3946f7aee67d0efa22c154d0a4549e13e0d"
+    },
+    {
+      "from": "history/README-v2.md",
+      "to": "回复/历史归档/README-v2.md",
+      "source_sha256": "8e13f2cb637fc51d82b98ccce5990fdc566e0fc84a50644f2be691cab49c1105"
+    },
+    {
+      "from": "README.md",
+      "to": "回复/历史归档/整理前总入口.md",
+      "source_sha256": "dba2361a09783b986c8bb8445fd1fccd70f6e60b550a99ac869d098bfa5dc92c"
+    }
+  ],
+  "legacy_link_repairs": [
+    {
+      "file": "history/20261116_kr-time-budget-v4-report.md",
+      "old": "../code/time_budget_v4.py",
+      "target": "pipeline/time_budget_v4.py"
+    },
+    {
+      "file": "history/20261116_kr-time-budget-v4-report.md",
+      "old": "../code/run_exit_v4.py",
+      "target": "pipeline/run_exit_v4.py"
+    },
+    {
+      "file": "history/20261116_kr-time-budget-v4-report.md",
+      "old": "../code/report_v4.py",
+      "target": "pipeline/report_v4.py"
+    },
+    {
+      "file": "history/20261116_kr-time-budget-v3-report.md",
+      "old": "../code/build_requests_v3.py",
+      "target": "pipeline/build_requests_v3.py"
+    },
+    {
+      "file": "history/20261116_kr-time-budget-v3-report.md",
+      "old": "../code/kr_request_schema.py",
+      "target": "pipeline/kr_request_schema.py"
+    },
+    {
+      "file": "history/20261116_kr-time-budget-v3-report.md",
+      "old": "../code/time_budget_v3.py",
+      "target": "pipeline/time_budget_v3.py"
+    },
+    {
+      "file": "history/20261116_kr-time-budget-v3-report.md",
+      "old": "../code/run_exit_v3.py",
+      "target": "pipeline/run_exit_v3.py"
+    }
+  ],
+  "protected_python_files_unchanged": 65,
+  "note": "旧报告生成脚本保留原源码，其硬编码输出路径未随文档迁移改变；重新生成早期报告时需按本映射归档。"
+}

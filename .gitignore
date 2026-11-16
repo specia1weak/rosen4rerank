@@ -1,0 +1,46 @@
+# macOS and local IDE settings
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python environments, bytecode, tooling caches and package builds
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.egg-info/
+/build/
+/dist/
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Raw datasets and generated experiment artifacts (keep these on disk)
+/datasource/
+/workspace/kr_time_budget/data/
+/workspace/kr_time_budget/runs/
+/workspace/kr_time_budget/logs/
+*.log
+*.parquet
+*.pt
+*.pth
+*.ckpt
+
+# Machine-specific link to an external reference directory
+/references/rerank
