@@ -395,7 +395,7 @@ class SDSPMMoEModel(SDSPBaseModel, CustomTrainStepProtocol):
     def forward(self, x: torch.Tensor, domain_ids: torch.Tensor) -> torch.Tensor:
         return self._forward_debug(x, domain_ids)["logits"]
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 
@@ -608,7 +608,7 @@ class SDSPPLEModel(SDSPBaseModel, CustomTrainStepProtocol):
     def forward(self, x: torch.Tensor, domain_ids: torch.Tensor) -> torch.Tensor:
         return self._forward_debug(x, domain_ids)["logits"]
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 

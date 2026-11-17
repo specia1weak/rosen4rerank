@@ -22,8 +22,11 @@ class ObservationAuditToyModel(BaseModel):
         self.obp.observe("logits", logits, watch=True, gradient=True)
         return logits
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         return self._logits(interaction)
+
+    def predict(self, interaction):
+        return self.logits(interaction).sigmoid()
 
     def calculate_loss(self, interaction):
         labels = interaction[DummyCls.LABEL].float().view(-1)
@@ -72,3 +75,13 @@ def test_observation_audit_workflow_writes_sensitivity_and_gradient_reports(tmp_
     assert (tmp_path / "toy.gradient_batches.csv").exists()
     assert (tmp_path / "toy.gradient_summary.csv").exists()
     assert (tmp_path / "toy.md").exists()
+
+
+def test_audit_reads_raw_logits_without_double_sigmoid():
+    model = ObservationAuditToyModel()
+    batch = DummyCls.make_interaction(batch_size=4, user_id=torch.tensor([0, 1, 4, 5]))
+    workflow = ObservationAuditWorkflow(model, DummyCls.MANAGER, result_loader=[batch],
+                                       gradient_loader=[batch], device='cpu', write_outputs=False)
+    arrays = workflow.predict_arrays([batch], split='test')
+    torch.testing.assert_close(torch.from_numpy(arrays['logits']), model.logits(batch))
+    torch.testing.assert_close(torch.from_numpy(arrays['probs']), model.predict(batch))

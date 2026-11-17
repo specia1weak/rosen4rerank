@@ -44,7 +44,7 @@ class _HAMURDCNNet(torch.nn.Module):
             cn_out = self.cn(x)
             mlp_out = self.mlp(x)
             y = self.linear(torch.cat([cn_out, mlp_out], dim=1))
-            outputs.append(torch.sigmoid(y))
+            outputs.append(y)
         return select_by_domain_mask(outputs, domain_ids)
 
 
@@ -91,7 +91,7 @@ class _HAMURDCNAdapterNet(torch.nn.Module):
             mlp_out = self.mlp(x)
             mlp_out = self.adapter(mlp_out, hyper_out)
             y = self.linear(torch.cat([cn_out, mlp_out], dim=1))
-            outputs.append(torch.sigmoid(y))
+            outputs.append(y)
         return select_by_domain_mask(outputs, domain_ids)
 
 

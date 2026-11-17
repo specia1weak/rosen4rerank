@@ -88,7 +88,7 @@ class _HAMURMLPNet(nn.Module):
                     for position, adapter in zip(self.adapter_positions, self.adapters)
                 }
             logits = tower(x, adapter_hooks=adapter_hooks)
-            outputs.append(torch.sigmoid(logits))
+            outputs.append(logits)
         return select_by_domain_mask(outputs, domain_ids)
 
 

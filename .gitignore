@@ -33,9 +33,7 @@ coverage.xml
 
 # Raw datasets and generated experiment artifacts (keep these on disk)
 /datasource/
-/workspace/kr_time_budget/data/
-/workspace/kr_time_budget/runs/
-/workspace/kr_time_budget/logs/
+/workspace/
 *.log
 *.parquet
 *.pt

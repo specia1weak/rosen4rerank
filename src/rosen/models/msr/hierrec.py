@@ -248,12 +248,12 @@ class HierRec(MSRModel):
         x = self.out_trans(x)
         return self.dnn3(x).squeeze(-1)
 
-    def predict(self, interaction) -> torch.Tensor:
+    def logits(self, interaction) -> torch.Tensor:
         emb_x = self.concat_embed_input_fields(interaction)
         domain_emb = self.get_domain_embedding(interaction)
         return self.forward(emb_x, domain_emb)
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float()
-        logits = self.predict(interaction)
+        logits = self.logits(interaction)
         return nn.functional.binary_cross_entropy_with_logits(logits, labels)

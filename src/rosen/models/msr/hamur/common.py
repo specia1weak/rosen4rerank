@@ -228,7 +228,7 @@ class HAMURBaseModel(MSRModel):
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float()
-        probabilities = self.predict(interaction)
+        probabilities = self.logits(interaction).sigmoid()
         return nn.functional.binary_cross_entropy(
             self._clamp_probability(probabilities),
             labels,
@@ -253,7 +253,7 @@ class HAMURSingleInputModel(HAMURBaseModel):
         x = self.input_view(interaction)
         return self._flatten_embedding(x), interaction[self.DOMAIN].long()
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 
@@ -284,6 +284,6 @@ class HAMURWideDeepModel(HAMURBaseModel):
         domain_ids = interaction[self.DOMAIN].long()
         return wide_x, deep_x, domain_ids
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         wide_x, deep_x, domain_ids = self.encode_features(interaction)
         return self.forward(wide_x, deep_x, domain_ids)

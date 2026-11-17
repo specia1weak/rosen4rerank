@@ -6,6 +6,7 @@ from typing import Optional
 import torch
 
 from rosen.core.train.context import TrainContext
+from rosen.core.prediction import as_prediction
 from rosen.core.train.hooks import ObservationSourceProtocol
 from rosen.core.trainers.with_life import BaseTrainerWithLife
 from rosen.utils.observatory.audit.cut import (
@@ -59,8 +60,6 @@ class CutAuditTrainer(ObservationTrainer):
         port = model.obp
         for batch_idx, batch_interaction in enumerate(self.valid_loader):
             batch_interaction = batch_interaction.to(self.cfg.device)
-            uids = batch_interaction[self.manager.uid_field]
-            labels = batch_interaction[self.manager.label_field]
             eval_ctx = self._context(batch_idx=batch_idx, stage="eval")
             cut_ctx = port.cutting(active_cut)
             watch_ctx = (
@@ -77,7 +76,7 @@ class CutAuditTrainer(ObservationTrainer):
                 )
             if collect_watch_stats:
                 accumulate_watch_stats(watch_storage, port.watch_snapshot(clear=True))
-            self.evaluator.collect(uids, labels, batch_interaction, batch_preds_1d=scores)
+            self.evaluator.collect(batch_interaction, as_prediction(scores, target=model.LABEL))
 
         metrics_result = self.evaluator.summary(self.epoch)
         self.evaluator.clear()

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 # 将settings中的col分成用户侧和物品侧，BoleEmbLayer会把宽表Interaction 变成对应的Dict Embedding
 
 
-SPLIT_METHODS = Literal["source", "name", "none", None]
+SPLIT_METHODS = Literal["source", "name", "stack", "none", None]
 
 
 class RecEmbedding(nn.Module):
@@ -339,6 +339,19 @@ class EmbView:
         )
 
     @property
+    def num_fields(self) -> int:
+        """Number of selected fields, including explicitly selected sequences."""
+        return len(self.selected_settings)
+
+    @property
+    def field_dim(self) -> int:
+        """Common field width for stacked output; reject empty or mixed views."""
+        dims = {setting.field_name: int(setting.embedding_dim) for setting in self.selected_settings}
+        if not dims or len(set(dims.values())) != 1:
+            raise ValueError(f"field_dim requires a non-empty view with equal embedding dimensions, got {dims}.")
+        return next(iter(dims.values()))
+
+    @property
     def field_segments(self) -> tuple[tuple[str, int, int], ...]:
         cursor = 0
         segments = []
@@ -558,7 +571,7 @@ class OmniEmbLayer(nn.Module):
     ) -> Union[Dict[Union[str, FeatureSource], torch.Tensor], torch.Tensor, None]:
 
         split_by = split_by.lower() if isinstance(split_by, str) else None
-        if split_by not in ("source", "name", "none", None):
+        if split_by not in ("source", "name", "stack", "none", None):
             raise ValueError(f"Invalid split_by: {split_by}")
 
         # 1. 路由过滤：找出本次 forward 需要处理的所有 Setting
@@ -582,7 +595,7 @@ class OmniEmbLayer(nn.Module):
                 if exclude_fields and setting.field_name in exclude_fields:
                     continue
 
-                if (split_by == "none" or split_by is None) and setting.is_sequence_setting:
+                if split_by in ("none", "stack", None) and setting.is_sequence_setting:
                     if not (include_fields and setting.field_name in include_fields):
                         continue
 
@@ -596,6 +609,16 @@ class OmniEmbLayer(nn.Module):
 
         if split_by == "name":
             return {setting.field_name: emb for setting, emb in computed_results}
+
+        if split_by == "stack":
+            shapes = {setting.field_name: tuple(emb.shape) for setting, emb in computed_results}
+            if len(set(shapes.values())) != 1:
+                raise ValueError(
+                    "split_by='stack' requires matching tensor shapes for all selected fields "
+                    f"(including embedding dimensions), got {shapes}. "
+                    "Use include_fields/exclude_fields to select compatible fields."
+                )
+            return torch.stack([emb for _, emb in computed_results], dim=-2)
 
         if split_by == "source":
             output_dict = {}

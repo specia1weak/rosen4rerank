@@ -7,6 +7,7 @@ from typing import Callable, Optional, Union
 import torch
 
 from rosen.core.interaction import Interaction
+from rosen.core.prediction import as_prediction
 from rosen.core.train.context import (
     EvaluationFeedback,
     TrainContext,
@@ -52,6 +53,8 @@ class BaseTrainer:
         self.test_loader = loaders.test
 
         self.evaluator = components.evaluator_manager
+        if self.evaluator is not None:
+            self.evaluator.bind(manager)
         self.timer = components.timer
         self.recorder = components.recorder
         self.early_stopper = components.early_stopper
@@ -220,13 +223,11 @@ class BaseTrainer:
         model.eval()
         for batch_idx, batch_interaction in enumerate(loader):
             batch_interaction = batch_interaction.to(self.cfg.device)
-            uids = batch_interaction[self.manager.uid_field]
-            labels = batch_interaction[self.manager.label_field]
             if model is self.model:
                 scores = self.predict_step(batch_interaction)
             else:
                 scores = model.predict(batch_interaction)
-            self.evaluator.collect(uids, labels, batch_interaction, batch_preds_1d=scores)
+            self.evaluator.collect(batch_interaction, as_prediction(scores, target=model.LABEL))
 
         metrics_result = self.evaluator.summary(self.epoch)
         self.evaluator.clear()

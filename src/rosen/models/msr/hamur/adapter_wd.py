@@ -45,7 +45,7 @@ class _HAMURWideDeepNet(torch.nn.Module):
         for _ in range(self.num_domains):
             y_wide = self.linear(wide_x)
             y_deep = self.mlp(deep_x)
-            outputs.append(torch.sigmoid(y_wide + y_deep))
+            outputs.append(y_wide + y_deep)
         return select_by_domain_mask(outputs, domain_ids)
 
 
@@ -96,7 +96,7 @@ class _HAMURWideDeepAdapterNet(torch.nn.Module):
             y_deep = self.mlp(deep_x)
             mlp_out = self.adapter(y_deep, hyper_out)
             mlp_out = self.mlp_final(mlp_out)
-            outputs.append(torch.sigmoid(y_wide + mlp_out))
+            outputs.append(y_wide + mlp_out)
         return select_by_domain_mask(outputs, domain_ids)
 
 

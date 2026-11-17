@@ -409,7 +409,7 @@ class HyperGateModel(MSRModel):
         hidden, _ = self.backbone(x, domain_ids, labels)
         return self.head(hidden, domain_ids)
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 

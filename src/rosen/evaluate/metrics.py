@@ -59,8 +59,29 @@ class NDCG(BaseMetric):
         dcg_weights = 1.0 / torch.log2(ranks + 1)
         return (hits_k * dcg_weights).sum().item()
 
+
+class ListNDCG(BaseMetric):
+    """Per-row NDCG for labeled slates, distinct from leave-one-out NDCG."""
+
+    @classmethod
+    def calculate(cls, relevance, scores, k, mask=None):
+        if relevance.ndim != 2 or scores.shape != relevance.shape:
+            raise ValueError("List NDCG requires matching [B, K] relevance and scores.")
+        if k <= 0:
+            raise ValueError("NDCG k must be positive.")
+        valid = mask > 0 if mask is not None else torch.ones_like(relevance, dtype=torch.bool)
+        relevance = relevance.to(torch.float64)
+        gains = torch.where(valid, torch.pow(2.0, relevance) - 1.0, 0.0)
+        size = min(k, scores.shape[1])
+        discount = 1.0 / torch.log2(torch.arange(size, device=scores.device, dtype=torch.float64) + 2)
+        # Stable ties retain input slot order; invalid slots always sort last.
+        order = scores.masked_fill(~valid, -torch.inf).argsort(dim=-1, descending=True, stable=True)
+        dcg = (gains.gather(1, order)[:, :size] * discount).sum(-1)
+        idcg = (gains.sort(dim=-1, descending=True).values[:, :size] * discount).sum(-1)
+        return torch.where(idcg > 0, dcg / idcg.clamp_min(torch.finfo(torch.float64).tiny), 0.0)
+
 # 注册表：将字符串映射到对应的计算类
 METRIC_REGISTRY = {
     "auc": AUC, "logloss": LogLoss, "gauc": GAUC,
-    "hr": HR, "ndcg": NDCG
+    "hr": HR, "ndcg": NDCG, "list_ndcg": ListNDCG,
 }

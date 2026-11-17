@@ -401,11 +401,11 @@ class SATransModel(MSRModel):
     def forward(self, field_embeddings: torch.Tensor, domain_ids: torch.Tensor) -> torch.Tensor:
         return self._forward_dict(field_embeddings, domain_ids)["logits"]
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         field_embeddings, domain_ids = self.encode_features(interaction)
         return self.forward(field_embeddings, domain_ids)
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float()
-        logits = self.predict(interaction)
+        logits = self.logits(interaction)
         return F.binary_cross_entropy_with_logits(logits, labels)

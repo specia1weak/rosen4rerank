@@ -137,11 +137,11 @@ class M2MModel(MSRModel):
     def forward(self, x: torch.Tensor, domain_ids: torch.Tensor) -> torch.Tensor:
         return self._forward_dict(x, domain_ids)["logits"]
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float()
-        logits = self.predict(interaction)
+        logits = self.logits(interaction)
         return nn.functional.binary_cross_entropy_with_logits(logits, labels)

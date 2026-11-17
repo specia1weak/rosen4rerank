@@ -2754,7 +2754,7 @@ class AllDomainExpertMixerModel(MSRModel):
         self._latest_logit_components = self._tokens_to_logit_components(tokens, domain_ids)
         return self._latest_logit_components["logits"].view(-1)
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 
@@ -2794,7 +2794,7 @@ class AllDomainExpertMixerModel(MSRModel):
         labels = interaction[self.LABEL].float().view(-1)
         domain_ids = interaction[self.DOMAIN].long().view(-1)
         try:
-            logits = self.predict(interaction).view(-1)
+            logits = self.logits(interaction).view(-1)
             loss = F.binary_cross_entropy_with_logits(logits, labels)
             if self.lsp.active:
                 self.lsp.add("task", loss)

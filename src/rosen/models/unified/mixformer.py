@@ -2479,14 +2479,14 @@ class MixFormerModel(MSRModel):
     def forward(self, x: torch.Tensor, domain_ids: torch.Tensor) -> torch.Tensor:
         return self.head(x, domain_ids)
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         logits = self.forward(x, domain_ids)
         return logits
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float()
-        logits = self.predict(interaction)
+        logits = self.logits(interaction)
         loss = nn.functional.binary_cross_entropy_with_logits(logits, labels)
         if self.lsp.active:
             self.lsp.add("task", loss)
@@ -5642,7 +5642,7 @@ class CrossEventReaderMixFormerModel(MixFormerModel):
             features = torch.cat([features, late_target_x], dim=-1)
         return features, domain_ids
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         logits = self.forward(x, domain_ids)
         scaled_logit = getattr(self, "_last_cross_event_scaled_logit", None)
@@ -9839,7 +9839,7 @@ class DomainViewLogitMixFormerModel(MixFormerModel):
             features = torch.cat([features, late_target_x], dim=-1)
         return features, domain_ids
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         logits = self.forward(x, domain_ids)
         if isinstance(self._last_domain_view_logit_agg, torch.Tensor):

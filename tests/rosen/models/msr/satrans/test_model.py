@@ -20,7 +20,7 @@ def test_satrans_shared_linear_smoke():
     )
     interaction = DummyCls.make_interaction(batch_size=4)
 
-    logits = model.predict(interaction)
+    logits = model.logits(interaction)
     loss = model.calculate_loss(interaction)
 
     assert logits.shape == (4,)
@@ -42,6 +42,6 @@ def test_satrans_domain_tower_smoke():
     )
     interaction = DummyCls.make_interaction(batch_size=5)
 
-    logits = model.predict(interaction)
+    logits = model.logits(interaction)
 
     assert logits.shape == (5,)

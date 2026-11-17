@@ -15,6 +15,14 @@ class MSRModel(BaseModel):
     def forward(self, x: torch.Tensor, domain_ids: torch.Tensor):
         raise NotImplementedError
 
+    def logits(self, interaction) -> torch.Tensor:
+        """Return unnormalized binary-task scores; training never calls predict."""
+        raise NotImplementedError
+
+    def predict(self, interaction) -> torch.Tensor:
+        """Single-task probability output; Trainer adds Prediction metadata once."""
+        return self.logits(interaction).sigmoid()
+
     @classmethod
     def from_manager(cls, manager: SchemaManager, num_domains: int, **kwargs) -> 'MSRModel':
         init_signature = inspect.signature(cls.__init__)

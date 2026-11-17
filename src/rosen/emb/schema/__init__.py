@@ -1,4 +1,4 @@
-from .base import EmbSetting, EmbType, ProfileSeqGroupConfig, SeqGroupConfig
+from .base import EmbSetting, EmbType, ProfileSeqGroupConfig, SeqGroupConfig, SlateLabel
 from .categorical import BaseCategoricalSetting, MultiSparseSetting, QuantileEmbSetting, SparseEmbSetting
 from .numerical import BaseNumericalSetting, MinMaxDenseSetting, VectorDenseSetting
 from .sequence import SequenceSetting
@@ -8,6 +8,7 @@ __all__ = [
     "NULL_FALLBACK",
     "EmbSetting",
     "EmbType",
+    "SlateLabel",
     "SeqGroupConfig",
     "ProfileSeqGroupConfig",
     "BaseCategoricalSetting",

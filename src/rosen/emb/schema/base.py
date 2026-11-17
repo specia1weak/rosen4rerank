@@ -26,6 +26,29 @@ class EmbType(Enum):
     SEQUENCE = "sequence"
 
 
+@dataclass(frozen=True)
+class SlateLabel:
+    """Fixed-width list supervision, independent from embedding features."""
+
+    field_name: str
+    max_len: int
+    mask_field: Optional[str] = None
+    padding_side: Literal["left", "right"] = "right"
+    pad_val: float = 0.0
+
+    def __post_init__(self):
+        if not isinstance(self.field_name, str) or not self.field_name.strip():
+            raise ValueError("SlateLabel.field_name must be a non-empty string.")
+        if isinstance(self.max_len, bool) or not isinstance(self.max_len, int) or self.max_len <= 0:
+            raise ValueError("SlateLabel.max_len must be a positive integer.")
+        if self.padding_side not in ("left", "right"):
+            raise ValueError("SlateLabel.padding_side must be 'left' or 'right'.")
+        if self.mask_field is not None and (
+            not isinstance(self.mask_field, str) or not self.mask_field.strip()
+        ):
+            raise ValueError("SlateLabel.mask_field must be None or a non-empty string.")
+
+
 @dataclass
 class SeqGroupConfig:
     group_name: str

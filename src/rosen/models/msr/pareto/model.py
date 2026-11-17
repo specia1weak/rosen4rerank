@@ -88,13 +88,13 @@ class ParetoModel(MSRModel):
         features = self.encoder(x)
         return self.head(features, domain_ids)
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float().view(-1)
-        logits = self.predict(interaction).view(-1)
+        logits = self.logits(interaction).view(-1)
         return F.binary_cross_entropy_with_logits(logits, labels)
 
     def _update_domain_ema(self, domain_id: int, loss_value: torch.Tensor) -> None:

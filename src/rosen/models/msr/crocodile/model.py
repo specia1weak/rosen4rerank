@@ -272,9 +272,9 @@ class CrocodileModel(MSRModel):
     def forward(self, x: torch.Tensor, prior_emb: torch.Tensor, domain_ids: torch.Tensor) -> torch.Tensor:
         return self._forward_dict(x, prior_emb, domain_ids)["logits"]
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, prior_emb, domain_ids = self.encode_features(interaction)
-        return torch.sigmoid(self.forward(x, prior_emb, domain_ids))
+        return self.forward(x, prior_emb, domain_ids)
 
     def _covariance_regularization(self, expert_outputs: torch.Tensor) -> torch.Tensor:
         disentangled_loss = expert_outputs.new_tensor(0.0)

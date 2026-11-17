@@ -475,7 +475,7 @@ class ContexturePrototypeSharedBottomModel(SharedBottomModel):
         hidden = self.backbone(x, domain_ids)
         return self._calibrate_logits(self.head(hidden, domain_ids), domain_ids)
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 

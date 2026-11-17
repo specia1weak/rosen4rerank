@@ -196,6 +196,7 @@ def _resolve_raw_read_col_names(
         raw_col_names.extend(setting.get_raw_field_names())
 
     raw_col_names.extend(manager.label_fields)
+    raw_col_names.extend(getattr(manager, "mask_fields", ()))
     raw_col_names.extend(manager.domain_fields)
     if manager.time_field:
         raw_col_names.append(manager.time_field)
@@ -261,6 +262,19 @@ class TensorFormatter:
         formatters: Dict[str, ColumnFormatter] = {}
         for setting in self.context.manager.settings:
             formatters.update(setting.get_formatters())
+
+        get_label_spec = getattr(self.context.manager, "get_label_spec", lambda name: None)
+        for label_col in self.context.manager.label_fields:
+            spec = get_label_spec(label_col)
+            if spec is None:
+                continue
+            formatters[label_col] = PaddedFloatSequenceFormatter(
+                max_len=spec.max_len, padding_side=spec.padding_side, pad_val=spec.pad_val,
+            )
+            if spec.mask_field and spec.mask_field not in formatters:
+                formatters[spec.mask_field] = PaddedFloatSequenceFormatter(
+                    max_len=spec.max_len, padding_side=spec.padding_side, pad_val=0.0,
+                )
 
         for ctx_col in (
             *self.context.manager.label_fields,

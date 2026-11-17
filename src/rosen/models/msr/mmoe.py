@@ -617,13 +617,13 @@ class MMoEModel(MSRModel):
         hidden = self.head_input_activation(hidden)
         return self.head(hidden, domain_ids)
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float()
-        logits = self.predict(interaction)
+        logits = self.logits(interaction)
         return nn.functional.binary_cross_entropy_with_logits(logits, labels)
 
     def reset_train_observations(self) -> None:
@@ -709,13 +709,13 @@ class GradientBalancedMMoEModel(MSRModel):
         hidden = self.head_input_activation(hidden)
         return self.head(hidden, domain_ids)
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float().view(-1)
-        logits = self.predict(interaction).view(-1)
+        logits = self.logits(interaction).view(-1)
         loss = F.binary_cross_entropy_with_logits(logits, labels)
         self._loss_calls += 1
         if self.monitor_step_interval > 0 and self._loss_calls % self.monitor_step_interval == 0:

@@ -214,13 +214,13 @@ class AutoMTLModel(MSRModel):
         representation = self.backbone(sparse_embs, dense_features, domain_ids)
         return self.head(representation, domain_ids)
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         sparse_embs, dense_features, domain_ids = self.encode_features(interaction)
         return self.forward(sparse_embs, dense_features, domain_ids)
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float()
-        logits = self.predict(interaction)
+        logits = self.logits(interaction)
         return nn.functional.binary_cross_entropy_with_logits(logits, labels)
 
     def custom_train_step(self, batch_interaction, ctx: TrainContext):

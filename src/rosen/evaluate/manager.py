@@ -1,7 +1,15 @@
+"""Resolve targets once, then dispatch one EvalBatch contract to every evaluator."""
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
+
 import polars as pl
+import torch
+
+from rosen.core.prediction import Prediction, as_prediction
+from .batch import EvalBatch
+from .evaluator import BaseEvaluator
 
 
 class EvaluatorFilter(ABC):
@@ -17,93 +25,98 @@ class AllowAllFilter(EvaluatorFilter):
 
 class DomainFilter(EvaluatorFilter):
     def __init__(self, field_name: str, domain_id: int):
-        self.field_name = field_name
-        self.domain_id = domain_id
+        self.field_name, self.domain_id = field_name, domain_id
 
     def __call__(self, inter):
         return inter[self.field_name] == self.domain_id
 
-class EvaluatorManager:
-    def __init__(self, log_path=None, title="untitled"):
-        self.registry = {}
-        self.log_path = log_path
-        self.title = title
-        self._is_first_summary = True
 
+class EvaluatorManager:
+    def __init__(self, manager=None, log_path=None, title="untitled", *, uid_field=None):
+        self.schema_manager = manager
+        self.uid_field = uid_field
+        self.registry = {}
+        self.log_path, self.title = log_path, title
+        self._is_first_summary = True
         if self.log_path:
             Path(self.log_path).parent.mkdir(parents=True, exist_ok=True)
 
-    def register(self, name, evaluator, filter_fn=None):
-        """
-        注册评估器。
-        filter_fn: 接收 batch_inter，返回布尔掩码
-        """
-        if filter_fn is None:
-            filter_fn = AllowAllFilter()
+    def bind(self, manager):
+        """Trainer binding must not silently replace an explicitly supplied schema."""
+        if self.schema_manager is not None and self.schema_manager is not manager:
+            raise ValueError("EvaluatorManager is already bound to a different SchemaManager.")
+        self.schema_manager = manager
 
-        self.registry[name] = {
-            "evaluator": evaluator,
-            "filter_fn": filter_fn,
-        }
+    def register(self, name, evaluator: BaseEvaluator, filter_fn=None, *, target=None, uid_field=None):
+        if not isinstance(evaluator, BaseEvaluator):
+            raise TypeError("Evaluators must inherit BaseEvaluator; wrap old objects with LegacyEvaluatorAdapter.")
+        if target is not None and (not isinstance(target, str) or not target.strip()):
+            raise ValueError("target must be a non-empty label name.")
+        self.registry[name] = dict(evaluator=evaluator, filter_fn=filter_fn or AllowAllFilter(),
+                                   target=target, uid_field=uid_field)
 
-    def collect(self, batch_users, batch_targets, batch_inter, batch_preds_1d=None, batch_scores_2d=None, ):
-        """
-        前4个参数完全对齐你的基础 Evaluator。
-        唯一多出的 batch_inter 仅作为计算 mask 的上下文，不参与任何解包。
-        """
-        for name, config in self.registry.items():
-            evaluator = config["evaluator"]
-            filter_fn = config["filter_fn"]
+    def _target(self, pred, requested):
+        target = requested if requested is not None else pred.target
+        labels = getattr(self.schema_manager, "label_fields", ())
+        if target is None:
+            if len(labels) == 1:
+                target = labels[0]
+            elif len(labels) > 1:
+                raise ValueError("Ambiguous evaluation target: set register(target=...) or Prediction.target.")
+            elif isinstance(pred.scores, Mapping) or isinstance(pred.order, Mapping):
+                raise ValueError("Mapping predictions require an explicit target; keys are never guessed.")
+        if requested is not None and pred.target is not None and requested != pred.target:
+            if isinstance(pred.scores, torch.Tensor) or isinstance(pred.order, torch.Tensor) or pred.full_scores is not None:
+                raise ValueError(f"Prediction target {pred.target!r} conflicts with registered target {requested!r}.")
+        if labels and target is not None and target not in labels:
+            raise KeyError(f"Target {target!r} is not declared in SchemaManager.label_fields.")
+        return target
 
-            # 1. 仅把 inter 交给 filter_fn 算掩码，绝不从 inter 里取真实数据
-            mask = filter_fn(batch_inter)
-
-            # 2. 全量不过滤的情况
-            if isinstance(mask, bool) and mask is True:
-                evaluator.collect(batch_users, batch_targets, batch_preds_1d, batch_scores_2d)
+    def collect(self, inter, prediction):
+        pred = as_prediction(prediction)
+        if inter is not None and len(inter) != pred.batch_size:
+            raise ValueError("Interaction and Prediction must share the batch dimension.")
+        for config in self.registry.values():
+            row_mask = config["filter_fn"](inter)
+            if isinstance(row_mask, bool):
+                if not row_mask:
+                    continue
+                selected_inter, selected_pred = inter, pred
+            else:
+                if not isinstance(row_mask, torch.Tensor) or row_mask.dtype != torch.bool or row_mask.shape != (pred.batch_size,):
+                    raise ValueError("Evaluator filters must return bool or a boolean Tensor[B].")
+                if not row_mask.any():
+                    continue
+                selected_inter = inter[row_mask] if inter is not None else None
+                selected_pred = pred[row_mask]
+            if selected_pred.batch_size == 0:
                 continue
-
-            # 提前拦截空掩码
-            if isinstance(mask, bool) and mask is False:
-                continue
-            if hasattr(mask, 'any') and not mask.any():
-                continue
-
-            # 3. 对传入的张量进行原生的布尔切片
-            e_users = batch_users[mask]
-            e_targets = batch_targets[mask]
-            e_preds_1d = batch_preds_1d[mask] if batch_preds_1d is not None else None
-            e_scores_2d = batch_scores_2d[mask] if batch_scores_2d is not None else None
-
-            # 4. 完美对齐调用底层的 Evaluator
-            evaluator.collect(e_users, e_targets, e_preds_1d, e_scores_2d)
-
-    def _safe_summary(self, evaluator, epoch=None, step=None):
-        try:
-            return evaluator.summary(epoch=epoch, step=step)
-        except TypeError:
-            return evaluator.summary()
+            target = self._target(selected_pred, config["target"])
+            def slot(value):
+                return value[target] if isinstance(value, Mapping) else value
+            scores, order = slot(selected_pred.scores), slot(selected_pred.order)
+            targets = selected_inter[target] if selected_inter is not None and target is not None else None
+            mask = None
+            get_spec = getattr(self.schema_manager, "get_label_spec", None)
+            spec = get_spec(target) if get_spec is not None and target is not None else None
+            if spec is not None and spec.mask_field and selected_inter is not None:
+                mask = selected_inter[spec.mask_field]
+            uid_field = config["uid_field"] or self.uid_field
+            if uid_field is not None:
+                users = selected_inter[uid_field] if selected_inter is not None else None
+            else:
+                uid_field = getattr(self.schema_manager, "uid_field", None)
+                users = (selected_inter[uid_field] if selected_inter is not None and uid_field is not None
+                         and uid_field in selected_inter else None)
+            config["evaluator"].collect(EvalBatch(pred=selected_pred, inter=selected_inter, scores=scores,
+                                                 order=order, targets=targets, mask=mask, users=users))
 
     def summary(self, epoch=None, step=None):
-        """
-        返回每个 evaluator 的完整指标：
-        {
-            "overall": {"auc": 0.73, "logloss": 0.41},
-            "domain_a": {"gauc": 0.69},
-        }
-        """
-        summary_by_name = {}
-        log_metrics = {}
-        for name, config in self.registry.items():
-            res = self._safe_summary(config["evaluator"], epoch=epoch, step=step)
-            summary_by_name[name] = dict(res)
-            for metric_name, metric_value in res.items():
-                log_metrics[f"{name}.{metric_name}"] = metric_value
-
+        results = {name: dict(config["evaluator"].summary()) for name, config in self.registry.items()}
         if self.log_path:
-            self._write_polars_log(log_metrics, epoch, step)
-
-        return summary_by_name
+            self._write_polars_log({f"{name}.{metric}": value for name, values in results.items()
+                                    for metric, value in values.items()}, epoch, step)
+        return results
 
     def _write_polars_log(self, metrics_dict, epoch, step):
         """内部方法：专门负责将指标转成 Polars 字符串并追加到文件"""

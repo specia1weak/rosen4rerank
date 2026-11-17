@@ -34,7 +34,12 @@ def _as_sequence(value: Optional[Sequence | str]) -> list:
 
 
 class ObservationAuditWorkflow:
-    """Post-training ObservationPort sensitivity and gradient-conflict audit."""
+    """Binary-task audit; models must expose raw ``logits(interaction)``.
+
+    Sensitivity reports require actual logits as well as probabilities. The
+    public probability prediction interface must not be sigmoid-transformed
+    again here.
+    """
 
     def __init__(
             self,
@@ -106,7 +111,7 @@ class ObservationAuditWorkflow:
             domain_ids = batch[self.manager.domain_field].long().view(-1)
             cut_ctx = port.cutting(cut_name) if port is not None and hasattr(port, "cutting") else nullcontext()
             with cut_ctx:
-                logits = self.model.predict(batch).float().view(-1)
+                logits = self.model.logits(batch).float().view(-1)
             probs = torch.sigmoid(logits)
             labels_chunks.append(labels.detach().cpu().numpy().astype(np.int8))
             domain_chunks.append(domain_ids.detach().cpu().numpy().astype(np.int16))

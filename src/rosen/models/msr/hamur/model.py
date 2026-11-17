@@ -136,7 +136,7 @@ class HAMURModel(HAMURBaseModel):
     def forward(self, *args):
         return self.network(*args)
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         domain_ids = interaction[self.DOMAIN].long()
         if self._mode == "single":
             x = self._flatten_embedding(self.input_view(interaction))
@@ -145,4 +145,4 @@ class HAMURModel(HAMURBaseModel):
             wide_x = self._flatten_embedding(self.wide_view(interaction))
             deep_x = self._flatten_embedding(self.deep_view(interaction))
             return self.forward(wide_x, deep_x, domain_ids)
-        raise RuntimeError(f"Unknown HAMUR predict mode: {self._mode}")
+        raise RuntimeError(f"Unknown HAMUR logits mode: {self._mode}")

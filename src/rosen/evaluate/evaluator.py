@@ -1,256 +1,285 @@
-import json
-from typing import Iterable, Union, Literal
+"""Evaluators consume one resolved EvalBatch and never mutate its tensors."""
+from abc import ABC, abstractmethod
+from dataclasses import replace
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
-from sklearn.metrics import roc_auc_score, log_loss
 import torch
 
+from .batch import EvalBatch
+from .metrics import METRIC_REGISTRY
 
-class BaseEvaluator:
-    VALID_METRICS = ["auc", "logloss", "gauc", "hr", "ndcg", "recall"]
-    def __init__(self, metrics):
-        # 统一转小写并过滤非法指标
-        self.metrics = [m.lower() for m in metrics]
-        for m in self.metrics:
-            base_m = m.split('@')[0] if '@' in m else m
-            assert base_m in self.VALID_METRICS, f"不支持的指标: {m}"
-        self.clear()
 
-    def collect(self, batch_users, batch_targets, batch_preds):
+class BaseEvaluator(ABC):
+    @abstractmethod
+    def collect(self, batch: EvalBatch) -> None:
         raise NotImplementedError
 
-    def summary(self):
+    @abstractmethod
+    def summary(self) -> dict[str, float]:
         raise NotImplementedError
 
-    def clear(self):
+    @abstractmethod
+    def clear(self) -> None:
         raise NotImplementedError
 
 
-import numpy as np
-from rosen.evaluate.metrics import METRIC_REGISTRY
+def _metrics(values):
+    if len(values) == 1 and isinstance(values[0], (list, tuple)):
+        values = values[0]
+    return list(dict.fromkeys(value.lower() for value in values))
+
+
+def _pointwise_inputs(batch):
+    users, targets, scores, mask = batch.users, batch.targets, batch.scores, batch.mask
+    if targets is None or scores is None:
+        raise ValueError("Point-wise evaluation requires targets and scores.")
+    if targets.ndim not in (1, 2) or scores.shape != targets.shape:
+        raise ValueError("Point-wise targets and scores must have matching [B] or [B, K] shapes.")
+    if mask is not None and mask.shape != targets.shape:
+        raise ValueError("mask must have the same shape as targets.")
+    valid = mask > 0 if mask is not None else torch.ones_like(targets, dtype=torch.bool)
+    if users is not None:
+        if targets.ndim == 2 and users.shape == targets.shape[:1]:
+            users = users[:, None].expand_as(targets)
+        if users.shape != targets.shape:
+            raise ValueError("User IDs must have shape [B] or match the target shape.")
+        users = users[valid]
+    return users, targets[valid], scores[valid]
+
 
 class PointWiseEvaluator(BaseEvaluator):
-    def __init__(self, metrics):
-        super().__init__(metrics)
+    def __init__(self, *metrics):
+        self.metrics = _metrics(metrics)
+        if set(self.metrics) - {"auc", "logloss", "gauc"}:
+            raise ValueError(f"Unsupported point-wise metrics: {self.metrics}")
+        self.clear()
 
-    def collect(self, batch_users, batch_targets, batch_preds):
-        # 粗暴地把当前 Batch 的数据怼进大列表
-        self.all_users.extend(batch_users.tolist())
-        self.all_targets.extend(batch_targets.tolist())
-        self.all_preds.extend(batch_preds.tolist())
+    def collect(self, batch: EvalBatch):
+        users, targets, scores = _pointwise_inputs(batch)
+        if targets.numel() == 0:
+            return
+        if "gauc" in self.metrics and users is None:
+            raise ValueError("gauc requires user IDs; provide uid_field on EvaluatorManager or register.")
+        if users is not None:
+            self.all_users.extend(users.detach().cpu().tolist())
+        self.all_targets.extend(targets.detach().cpu().tolist())
+        self.all_preds.extend(scores.detach().cpu().tolist())
 
     def summary(self):
-        results = {}
         if not self.all_targets:
-            return results
-
-        y_true = np.array(self.all_targets)
-        y_pred = np.array(self.all_preds)
-
-        # 遍历指标，通过注册表调用静态计算方法
-        for m in self.metrics:
-            calc_class = METRIC_REGISTRY[m]
-            results[m] = calc_class.calculate(y_true=y_true, y_pred=y_pred, users=self.all_users)
-
-        return results
+            return {}
+        return {metric: float(METRIC_REGISTRY[metric].calculate(
+            y_true=np.array(self.all_targets), y_pred=np.array(self.all_preds), users=self.all_users,
+        )) for metric in self.metrics}
 
     def clear(self):
-        self.all_users = []
-        self.all_targets = []
-        self.all_preds = []
+        self.all_users, self.all_targets, self.all_preds = [], [], []
 
 
 class TopKEvaluator(BaseEvaluator):
-    def __init__(self, metrics, history_dict):
-        self.history_dict = history_dict
-        super().__init__(metrics)
+    """Leave-one-out full-catalog metrics; labels are catalog item indices."""
+    def __init__(self, *metrics, history_dict=None):
+        self.metrics = _metrics(metrics)
+        for metric in self.metrics:
+            name, separator, cutoff = metric.partition("@")
+            if name not in ("hr", "ndcg") or not separator or not cutoff.isdigit() or int(cutoff) <= 0:
+                raise ValueError(f"Unsupported full-catalog metric: {metric}")
+        self.history_dict = history_dict if history_dict is not None else {}
+        self.clear()
 
-        # 解析 K 值 (例如将 'hit@5', 'ndcg@10' 解析出 k_list = [5, 10])
-        self.k_list = sorted(list(set([int(m.split('@')[1]) for m in self.metrics])))
-        self.max_k = max(self.k_list) if self.k_list else 0
-
-    def collect(self, batch_users, batch_targets, batch_scores):
-        device = batch_scores.device
-        batch_size = batch_users.size(0)
-        batch_indices = torch.arange(batch_size, device=device)
-        target_original_scores = batch_scores[batch_indices, batch_targets].clone()
-        # 1. 瞬间 Mask 历史物品
-        rows, cols = [], []
-        for i, uid in enumerate(batch_users.tolist()):
-            hist = self.history_dict.get(uid, [])
-            rows.extend([i] * len(hist))
-            cols.extend(hist)
-        if rows:
-            batch_scores[rows, cols] = -float('inf')
-        batch_scores[batch_indices, batch_targets] = target_original_scores # 将目标物品的分数还原
-        # 2. 取 Top-Max_K 并生成命中矩阵 [Batch_size, max_k]
-        _, topk_indices = torch.topk(batch_scores, self.max_k, dim=-1)
-        hits = (topk_indices == batch_targets.unsqueeze(1)).float()
-
-        # 3. 现结现清：调用指标类算总和并累加
-        for k in self.k_list:
-            hits_k = hits[:, :k]
-            for m in self.metrics:
-                metric_name, metric_k = m.split('@')
-                if int(metric_k) == k:
-                    calc_class = METRIC_REGISTRY[metric_name]
-                    # 调用静态方法获取当前 Batch 的总得分
-                    batch_sum = calc_class.calculate(hits_k=hits_k, k=k)
-                    self.metric_sums[m] += batch_sum
-
-        self.total_users += batch_size
-
-    def summary(self):
-        results = {}
-        if self.total_users == 0:
-            return results
-        for m in self.metrics:
-            results[m] = self.metric_sums[m] / self.total_users
-        return results
-
-    def clear(self):
-        self.metric_sums = {m: 0.0 for m in self.metrics}
-        self.total_users = 0
-
-import polars as pl
-ValidMetrics = Literal["auc", "logloss", "gauc", "HR@*", "NDCG@*"]
-class Evaluator:
-    def __init__(self, *metrics: ValidMetrics, history_dict=None):
-        """
-        metrics: list of str, 例如 ['auc', 'logloss', 'hit@10', 'ndcg@20']
-        history_dict: dict, TopK 评估必须传入的静态历史黑名单
-        """
-        self.metrics = [m.lower() for m in metrics]
-        # 1. 自动解析和分流指标
-        self.point_metrics = [m for m in self.metrics if '@' not in m]
-        self.topk_metrics = [m for m in self.metrics if '@' in m]
-
-        # 2. 实例化底层 Evaluator
-        self.point_evaluator = None
-        self.topk_evaluator = None
-
-        if self.point_metrics:
-            self.point_evaluator = PointWiseEvaluator(self.point_metrics)
-
-        if self.topk_metrics:
-            assert history_dict is not None, "错误：计算 TopK 指标必须传入 history_dict 以进行历史剔除！"
-            self.topk_evaluator = TopKEvaluator(self.topk_metrics, history_dict)
-
-    def collect(self, batch_users, batch_targets, batch_preds_1d=None, batch_scores_2d=None):
-        if self.point_evaluator:
-            self.collect_pointwise(batch_users, batch_targets, batch_preds_1d)
-        if self.topk_evaluator:
-            self.collect_topk(batch_users, batch_targets, batch_scores_2d)
-
-    def collect_pointwise(self, batch_users, batch_targets, batch_preds_1d):
-        """
-        收集 CTR 等 Point-wise 任务的预测结果。
-        - batch_preds_1d: shape [Batch_Size]，通常为 0~1 的概率值。
-        """
-        if self.point_evaluator is None:
-            raise RuntimeError("未初始化 PointWise 评估器。请检查是否传入了 auc, logloss 等指标。")
-        self.point_evaluator.collect(batch_users, batch_targets, batch_preds_1d)
-
-    def collect_topk(self, batch_users, batch_targets, batch_scores_2d):
-        """
-        收集序列推荐/召回等 Top-K 任务的全排序得分。
-        - batch_scores_2d: shape [Batch_Size, Num_Items]，通常为 Raw Logits。
-        """
-        if self.topk_evaluator is None:
-            raise RuntimeError("未初始化 TopK 评估器。请检查是否传入了 hit@k, ndcg@k 等指标。")
-        self.topk_evaluator.collect(batch_users, batch_targets, batch_scores_2d)
+    def collect(self, batch: EvalBatch):
+        scores, targets, users = batch.pred.full_scores, batch.targets, batch.users
+        if scores is None or targets is None or users is None:
+            raise ValueError("TopKEvaluator requires full_scores, catalog targets and user IDs.")
+        if batch.mask is not None:
+            raise ValueError("Full-catalog TopKEvaluator does not accept slot masks; use SlateEvaluator.")
+        if targets.shape != scores.shape[:1] or targets.dtype != torch.long or users.shape != targets.shape:
+            raise ValueError("Catalog targets must be LongTensor[B], with user IDs [B].")
+        if scores.shape[1] == 0 or ((targets < 0) | (targets >= scores.shape[1])).any():
+            raise ValueError("Catalog target index is outside full_scores.")
+        if not targets.numel():
+            return
+        local = scores.detach().clone()
+        row_ids = torch.arange(scores.shape[0], device=scores.device)
+        positives = local[row_ids, targets].clone()
+        for row, uid in enumerate(users.tolist()):
+            history = self.history_dict.get(uid, [])
+            if history:
+                local[row, history] = -torch.inf
+        local[row_ids, targets] = positives
+        max_k = min(max((int(m.split('@')[1]) for m in self.metrics), default=0), scores.shape[1])
+        indices = local.topk(max_k, dim=-1).indices
+        hits = (indices == targets[:, None]).float()
+        for metric in self.metrics:
+            name, cutoff = metric.split("@")
+            k = min(int(cutoff), scores.shape[1])
+            self.sums[metric] += METRIC_REGISTRY[name].calculate(hits_k=hits[:, :k], k=k)
+        self.count += scores.shape[0]
 
     def summary(self):
-        """
-        Epoch 结束时调用，合并所有底层 Evaluator 的成绩单并保存
-        epoch/step: 可选，用于记录当前是第几轮或第几步
-        """
-        final_results = {}
-
-        if self.point_evaluator:
-            final_results.update(self.point_evaluator.summary())
-
-        if self.topk_evaluator:
-            final_results.update(self.topk_evaluator.summary())
-
-        return final_results
+        return {name: value / self.count for name, value in self.sums.items()} if self.count else {}
 
     def clear(self):
-        """
-        清空缓存和累加器，准备下一个 Epoch
-        """
-        if self.point_evaluator:
-            self.point_evaluator.clear()
+        self.sums = dict.fromkeys(self.metrics, 0.0)
+        self.count = 0
 
-        if self.topk_evaluator:
-            self.topk_evaluator.clear()
 
-class EvaluatorDecorator:
-    def __init__(self, evaluator):
-        self.evaluator = evaluator
-    def collect_pointwise(self, batch_users, batch_targets, batch_preds_1d):
-        self.evaluator.collect_pointwise(batch_users, batch_targets, batch_preds_1d)
-    def collect_topk(self, batch_users, batch_targets, batch_scores_2d):
-        self.evaluator.collect_topk(batch_users, batch_targets, batch_scores_2d)
-    def collect(self, batch_users, batch_targets, batch_preds_1d=None, batch_scores_2d=None):
-        self.evaluator.collect(batch_users, batch_targets, batch_preds_1d, batch_scores_2d)
-    def summary(self, epoch=None, step=None):
+class Evaluator(BaseEvaluator):
+    """Compatibility facade: retain mixed point-wise / full-catalog registration."""
+    def __init__(self, *metrics, history_dict=None):
+        self.metrics = _metrics(metrics)
+        point = [metric for metric in self.metrics if "@" not in metric]
+        topk = [metric for metric in self.metrics if "@" in metric]
+        if topk and history_dict is None:
+            raise ValueError("Full-catalog metrics require history_dict (an empty dict is allowed).")
+        self.point_evaluator = PointWiseEvaluator(*point) if point else None
+        self.topk_evaluator = TopKEvaluator(*topk, history_dict=history_dict) if topk else None
+
+    def collect(self, batch: EvalBatch):
+        if self.point_evaluator is not None:
+            self.point_evaluator.collect(batch)
+        if self.topk_evaluator is not None:
+            self.topk_evaluator.collect(batch)
+
+    def summary(self):
+        result = {}
+        for evaluator in (self.point_evaluator, self.topk_evaluator):
+            if evaluator is not None:
+                result.update(evaluator.summary())
+        return result
+
+    def clear(self):
+        for evaluator in (self.point_evaluator, self.topk_evaluator):
+            if evaluator is not None:
+                evaluator.clear()
+
+
+class SlateEvaluator(BaseEvaluator):
+    """Supervised input-slate score metrics, accumulated across all batches."""
+    def __init__(self, *metrics, ndcg_gain_source="label"):
+        self.metrics = _metrics(metrics)
+        if ndcg_gain_source not in ("label", "position"):
+            raise ValueError("ndcg_gain_source must be 'label' or 'position'.")
+        self.ndcg_gain_source = ndcg_gain_source
+        for metric in self.metrics:
+            if metric in ("auc", "logloss", "gauc", "cb"):
+                continue
+            name, separator, cutoff = metric.partition("@")
+            if name != "ndcg" or not separator or not cutoff.isdigit() or int(cutoff) <= 0:
+                raise ValueError(f"Unsupported slate metric: {metric}; candidate metrics belong in custom evaluators.")
+        self.point_evaluator = PointWiseEvaluator(*(m for m in self.metrics if m in ("auc", "logloss", "gauc")))
+        self.clear()
+
+    def collect(self, batch: EvalBatch):
+        labels, scores = batch.targets, batch.scores
+        if labels is None or scores is None or labels.ndim != 2 or scores.shape != labels.shape:
+            raise ValueError("SlateEvaluator requires matching [B, K] targets and scores.")
+        if batch.mask is not None and batch.mask.shape != labels.shape:
+            raise ValueError("mask must have the same shape as slate targets.")
+        if self.point_evaluator.metrics:
+            self.point_evaluator.collect(batch)
+        labels, scores = labels.detach().cpu().double(), scores.detach().cpu().double()
+        valid = batch.mask.detach().cpu() > 0 if batch.mask is not None else torch.ones_like(labels, dtype=torch.bool)
+        self.label_sum += labels[valid].sum().item()
+        self.pred_sum += scores[valid].sum().item()
+        self.slot_count += int(valid.sum())
+        relevance = labels if self.ndcg_gain_source == "label" else torch.arange(
+            labels.shape[1] - 1, -1, -1, dtype=labels.dtype,
+        ).expand_as(labels)
+        rows = valid.any(-1)
+        for metric in self.sums:
+            values = METRIC_REGISTRY["list_ndcg"].calculate(relevance, scores, int(metric.split('@')[1]), mask=valid)
+            self.sums[metric] += values[rows].sum().item()
+            self.counts[metric] += int(rows.sum())
+
+    def summary(self):
+        result = self.point_evaluator.summary() if self.point_evaluator.metrics else {}
+        if "cb" in self.metrics and self.slot_count:
+            result["cb"] = self.pred_sum / self.label_sum if self.label_sum else 0.0
+        result.update({metric: value / self.counts[metric] for metric, value in self.sums.items() if self.counts[metric]})
+        return result
+
+    def clear(self):
+        self.point_evaluator.clear()
+        self.sums = {metric: 0.0 for metric in self.metrics if metric.startswith("ndcg@")}
+        self.counts = dict.fromkeys(self.sums, 0)
+        self.label_sum = self.pred_sum = 0.0
+        self.slot_count = 0
+
+
+class OrderEvaluator(BaseEvaluator):
+    """Evaluate the final permutation, using original-slot labels and masks."""
+    def __init__(self, *metrics):
+        self.metrics = _metrics(metrics)
+        if any(not metric.startswith("ndcg@") for metric in self.metrics):
+            raise ValueError("OrderEvaluator supports ndcg@k metrics.")
+        self.evaluator = SlateEvaluator(*self.metrics)
+
+    def collect(self, batch: EvalBatch):
+        order, labels = batch.order, batch.targets
+        if order is None or labels is None or labels.ndim != 2 or order.shape != labels.shape:
+            raise ValueError("OrderEvaluator requires matching [B, K] order and targets.")
+        expected = torch.arange(order.shape[1], device=order.device).expand_as(order)
+        if order.dtype != torch.long or not torch.equal(order.sort(-1).values, expected):
+            raise ValueError("order must be a permutation of input slot indices 0..K-1.")
+        ranks = torch.arange(order.shape[1], 0, -1, device=order.device, dtype=torch.float32).expand_as(order)
+        scores = torch.zeros_like(ranks).scatter(1, order, ranks)
+        self.evaluator.collect(replace(batch, scores=scores))
+
+    def summary(self):
         return self.evaluator.summary()
+
     def clear(self):
         self.evaluator.clear()
 
-import os
-from datetime import datetime
+
+class LegacyEvaluatorAdapter(BaseEvaluator):
+    """Explicit bridge for an old collect(users, targets, preds, full_scores) object.
+
+    Slot masks need a real migration rather than silently changing old semantics.
+    """
+    def __init__(self, evaluator):
+        self.evaluator = evaluator
+
+    def collect(self, batch: EvalBatch):
+        if batch.mask is not None:
+            raise ValueError("LegacyEvaluatorAdapter does not support slot masks; migrate collect(EvalBatch).")
+        self.evaluator.collect(batch.users, batch.targets, batch.scores, batch.pred.full_scores)
+
+    def summary(self):
+        return self.evaluator.summary()
+
+    def clear(self):
+        self.evaluator.clear()
+
+
+class EvaluatorDecorator(BaseEvaluator):
+    def __init__(self, evaluator):
+        self.evaluator = evaluator
+
+    def collect(self, batch: EvalBatch):
+        self.evaluator.collect(batch)
+
+    def summary(self):
+        return self.evaluator.summary()
+
+    def clear(self):
+        self.evaluator.clear()
+
+
 class LogDecorator(EvaluatorDecorator):
+    """Optional standalone metric log; epoch/step logging belongs to the manager."""
     def __init__(self, evaluator, save_path=None, title=None):
-        """
-        evaluator: 原始的 Evaluator 实例
-        save_path: 日志保存路径
-        """
         super().__init__(evaluator)
-        self.save_path = save_path
-        self.title = title
-        self._is_first_summary = True
-
+        self.save_path, self.title = Path(save_path) if save_path else None, title
         if self.save_path:
-            os.makedirs(os.path.dirname(os.path.abspath(self.save_path)), exist_ok=True)
+            self.save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def summary(self, epoch=None, step=None):
-        """
-        拦截原有的 summary 方法，在拿到结果后增加纯文本写入的逻辑
-        同时扩展了接受 epoch 和 step 的能力
-        """
-        # 1. 调用原 Evaluator 的 summary 获取干净的指标字典
-        final_results = self.evaluator.summary()
-
-        # 2. 拦截并执行纯文本日志写入逻辑
+    def summary(self):
+        result = self.evaluator.summary()
         if self.save_path:
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            with open(self.save_path, 'a', encoding='utf-8') as f:
-                # 首次写入打分割线
-                if self._is_first_summary:
-                    title = self.title or ""
-                    f.write(f"\n========== {title}实验进程开始 | 首次评估时间: {current_time} ==========\n")
-                    self._is_first_summary = False
-
-                # 拼接易读字符串
-                log_parts = [f"[{current_time}]"]
-                if epoch is not None:
-                    log_parts.append(f"Epoch: {epoch:02d}")
-                if step is not None:
-                    log_parts.append(f"Step: {step}")
-
-                # 遍历原始指标写入
-                for metric_name, value in final_results.items():
-                    if isinstance(value, float):
-                        log_parts.append(f"{metric_name}: {value:.4f}")
-                    else:
-                        log_parts.append(f"{metric_name}: {value}")
-
-                f.write(" | ".join(log_parts) + '\n')
-
-        return final_results
-
-if __name__ == '__main__':
-    ...
+            with self.save_path.open("a", encoding="utf-8") as stream:
+                stream.write(f"[{datetime.now().isoformat(timespec='seconds')}] {self.title or ''} {result}\n")
+        return result

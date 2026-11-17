@@ -193,7 +193,7 @@ class MultiEmbModel(TwoStageRetrainMixin, MSRModel, CustomTrainStepProtocol):
     def forward(self, x: torch.Tensor, mask_x: torch.Tensor, domain_ids: torch.Tensor) -> torch.Tensor:
         return self._forward_dict(x, mask_x, domain_ids)["selected_logits"]
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         shared_x, mask_x, domain_ids = self.encode_features(interaction)
         return self.forward(shared_x, mask_x, domain_ids)
 

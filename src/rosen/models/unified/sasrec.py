@@ -466,13 +466,13 @@ class SASRecRankerModel(MSRModel):
     def forward(self, x: torch.Tensor, domain_ids: torch.Tensor) -> torch.Tensor:
         return self.head(x, domain_ids)
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         return self.forward(x, domain_ids)
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float()
-        logits = self.predict(interaction)
+        logits = self.logits(interaction)
         return nn.functional.binary_cross_entropy_with_logits(logits, labels)
 
 
@@ -955,7 +955,7 @@ class DomainPairBranchSASRecRankerModel(SASRecRankerModel):
             logits = logits + branch_logits
         return logits, parts["domain_ids"], parts["features"]
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         logits, _, _ = self.predict_logits_with_domains(interaction)
         return logits
 
@@ -1620,7 +1620,7 @@ class DVCSeqStage2SASRecRankerModel(DomainPairBranchSASRecRankerModel):
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float()
-        logits = self.predict(interaction)
+        logits = self.logits(interaction)
         loss = F.binary_cross_entropy_with_logits(logits, labels)
         aux_loss = self.dvc_auxiliary_loss(labels)
         if aux_loss is not None:

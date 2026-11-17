@@ -90,7 +90,7 @@ def test_sharedbottom_codebook_smoke():
     model = build_model(DummyCls.MANAGER, DummyCls.NUM_DOMAINS, "sharedbottom_codebook")
     interaction = DummyCls.make_interaction(batch_size=4)
 
-    logits = model.predict(interaction)
+    logits = model.logits(interaction)
     loss = model.calculate_loss(interaction)
 
     assert logits.shape == (4,)

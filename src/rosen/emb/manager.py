@@ -10,7 +10,7 @@ from typing import Any, Iterable, List, Literal, Mapping, Optional, Union
 import polars as pl
 
 from rosen.emb.split import SplitConfig, SplitContext, create_split_strategy
-from rosen.emb.schema import EmbSetting, EmbType, MultiSparseSetting, SparseEmbSetting
+from rosen.emb.schema import EmbSetting, EmbType, MultiSparseSetting, SlateLabel, SparseEmbSetting
 from rosen.core.enum_type import FeatureSource
 
 from rosen.utils.sort import sort_parquet_inplace
@@ -58,7 +58,7 @@ class SchemaManager:
     WHOLE_DATA_NAME = "whole_dataframe.parquet"
     def __init__(self, settings_list: List[EmbSetting], schema_dir: str,
                  time_field=None,
-                 label_fields: Union[str, Iterable[str]]=None,
+                 label_fields: Union[str, SlateLabel, Iterable[Union[str, SlateLabel]]]=None,
                  domain_fields: Union[str, Iterable[str]]=None
                  ):
         self.settings = settings_list
@@ -78,21 +78,67 @@ class SchemaManager:
             None
         )
         self.time_field = time_field
-        self._label_fields = ensure_list(label_fields)
+        self._label_specs: dict[str, Optional[SlateLabel]] = {}
+        for label in ensure_list(label_fields):
+            if isinstance(label, SlateLabel):
+                name, spec = label.field_name, label
+            elif isinstance(label, str) and label.strip():
+                name, spec = label, None
+            else:
+                raise ValueError("label_fields must contain non-empty strings or SlateLabel instances.")
+            if name in self._label_specs and self._label_specs[name] != spec:
+                raise ValueError(f"Conflicting label declarations for '{name}'.")
+            self._label_specs[name] = spec
+        self._label_fields = list(self._label_specs)
+        mask_layouts = {}
+        for spec in self._label_specs.values():
+            if spec is None or spec.mask_field is None:
+                continue
+            layout = (spec.max_len, spec.padding_side)
+            if spec.mask_field in mask_layouts and mask_layouts[spec.mask_field] != layout:
+                raise ValueError(f"Shared mask '{spec.mask_field}' requires matching max_len and padding_side.")
+            mask_layouts[spec.mask_field] = layout
         self._domain_fields = ensure_list(domain_fields)
 
     @property
-    def label_field(self):
+    def label_field(self) -> Optional[str]:
         return next(iter(self._label_fields), None)
     @property
-    def label_fields(self) -> tuple:
+    def label_fields(self) -> tuple[str, ...]:
         return tuple(self._label_fields)
+    def get_label_spec(self, field_name: str) -> Optional[SlateLabel]:
+        """Return list supervision metadata, or None for scalar/unknown fields."""
+        return self._label_specs.get(field_name)
+    @property
+    def mask_fields(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            spec.mask_field for spec in self._label_specs.values()
+            if spec is not None and spec.mask_field is not None
+        ))
     @property
     def domain_field(self):
         return next(iter(self._domain_fields), None)
     @property
     def domain_fields(self) -> tuple:
         return tuple(self._domain_fields)
+
+    def _sync_sequence_fit_state(self):
+        for setting in self.settings:
+            if hasattr(setting, "element_setting"):
+                setting.is_fitted = setting.element_setting.is_fitted
+
+    def _unfitted_fit_settings(self):
+        """Fit shared targets once, using their first registered source only."""
+        self._sync_sequence_fit_state()
+        seen = set()
+        settings = []
+        for setting in self.settings:
+            target = getattr(setting, "element_setting", setting)
+            if target.is_fitted or id(target) in seen:
+                continue
+            seen.add(id(target))
+            settings.append(setting)
+        return settings
 
 
     def _parse_output_dir(self, output_dir=None):
@@ -117,17 +163,14 @@ class SchemaManager:
         lazy_df = self._make_checkpoint(lazy_df)
 
         print("[*] 阶段一：构建 Fit 计算图...")
-        fit_exprs = []
-        for setting in self.settings:
-            if not setting.is_fitted:
-                fit_exprs.extend(setting.get_fit_exprs())
+        unfitted_settings = self._unfitted_fit_settings()
+        fit_exprs = [expr for setting in unfitted_settings for expr in setting.get_fit_exprs()]
 
         if fit_exprs:
             print(f"[*] 启动单次全表扫描获取统计量，包含 {len(fit_exprs)} 个计算节点...")
             fit_result = lazy_df.select(fit_exprs).collect()
-            for setting in self.settings:
-                if not setting.is_fitted:
-                    setting.parse_fit_result(fit_result)
+            for setting in unfitted_settings:
+                setting.parse_fit_result(fit_result)
             print("[+] 统计量计算与映射表构建完成。")
         else:
             print("[+] 所有特征已就绪，跳过 Fit 扫描。")
@@ -154,7 +197,7 @@ class SchemaManager:
             self.load_schema()
             print("[+] 所有特征已就绪，跳过 Fit 扫描。")
             return
-        unfitted_settings = [s for s in self.settings if not s.is_fitted]
+        unfitted_settings = self._unfitted_fit_settings()
         if not unfitted_settings:
             print("[+] 所有特征已就绪，跳过 Fit 扫描。")
             self.save_schema()
@@ -553,6 +596,7 @@ class SchemaManager:
         return split_paths
 
     def save_schema(self):
+        self._sync_sequence_fit_state()
         vocab_dir = self.meta_filepath.parent / VOCAB_DIR_NAME
         vocab_dir.mkdir(parents=True, exist_ok=True)
         meta_data = []
@@ -611,6 +655,7 @@ class SchemaManager:
                 print(f"[-] 成功恢复特征状态: {setting.field_name}")
             else:
                 print(f"[Warning] 特征 {setting.field_name} 在 JSON 元数据中未找到，将保持默认/未拟合状态。")
+        self._sync_sequence_fit_state()
 
     def source2emb_dim(self, *sources: FeatureSource):
         emb_dim = 0
@@ -632,7 +677,7 @@ class SchemaManager:
                 if field_name not in fields:
                     fields.append(field_name)
 
-        for ctx_field in (self.time_field, *self.label_fields, *self.domain_fields):
+        for ctx_field in (self.time_field, *self.label_fields, *self.mask_fields, *self.domain_fields):
             if ctx_field is not None and ctx_field not in fields:
                 fields.append(ctx_field)
         return fields
