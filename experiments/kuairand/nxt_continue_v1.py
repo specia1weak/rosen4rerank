@@ -233,6 +233,9 @@ def _item_priors(query: pl.DataFrame, observations: pl.DataFrame) -> pl.DataFram
 
 
 def _encode_requests(raw: pl.DataFrame, output: Path, seed: int) -> dict:
+    # A fixed shuffle seed is reproducible only with a fixed input order.
+    # Prior joins/group_by may reorder rows; canonicalize before fit/split/shuffle.
+    raw = raw.sort("session_id", "req_idx_raw")
     raw = raw.with_columns(*[pl.col(c).clip(lower_bound=0).log1p().cast(pl.Float32) for c in BUDGET_PRIOR_FIELDS])
     manager = build_schema(output / "schema")
     manager.fit(raw.filter(pl.col("split") == "train").lazy())
@@ -296,7 +299,9 @@ def _prepare_data(source: Path, output: Path, log_paths: list[Path], seed: int) 
         pl.col("music_type").cast(pl.Int64).cast(pl.String).fill_null("__MISSING__"), pl.col("author_id").fill_null(-1),
         pl.any_horizontal(*[pl.col(c) == 1 for c in ("is_like", "is_comment", "is_follow", "is_forward")]).cast(pl.Int8).alias("positive"),
     )
-    requests = _aggregate_requests(selected).join(usable, on=["user_id", "session_id"], how="left", validate="m:1").with_row_index("request_id")
+    requests = _aggregate_requests(selected).join(
+        usable, on=["user_id", "session_id"], how="left", validate="m:1", maintain_order="left",
+    ).with_row_index("request_id")
     selected.select("event_id", "user_id", "session_id", "req_idx", "event_idx").join(
         requests.select("session_id", "req_idx", "request_id"), on=["session_id", "req_idx"], how="left",
     ).write_parquet(output / "request_events.parquet")
@@ -336,7 +341,7 @@ def _prepare_data(source: Path, output: Path, log_paths: list[Path], seed: int) 
             "pace": "Float32 log1p(elapsed_min_raw / req_idx_raw), materialized before encoding and shuffle",
             "content": "current static slate, prior-request history and four current-request feedback rates; decision after feedback",
             "schema": "fit train only; budget priors log1p; other dense values passthrough; pace/clock/IDs typed auxiliary columns",
-            "ordering": "train physical shuffle; valid/test session_id, req_idx ascending",
+            "ordering": "canonical session_id, req_idx_raw order before seeded train shuffle; valid/test retain canonical order",
         },
     }
 

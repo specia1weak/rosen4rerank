@@ -1,5 +1,6 @@
 """nxt_continue_v1 的 raw -> parquet -> Interaction 链路。"""
 from datetime import datetime, timezone
+import json
 
 import polars as pl
 import pytest
@@ -13,6 +14,7 @@ from experiments.kuairand.nxt_continue_v1 import (
     FusionExitModel,
     TimeBudgetExitModel,
     _aggregate_requests,
+    _encode_requests,
     _item_priors,
     _sessionize,
     _user_priors,
@@ -86,6 +88,21 @@ def test_preprocessing_materializes_pace_and_models_consume_the_column(raw_sourc
         assert all(p.grad is None or torch.isfinite(p.grad).all() for p in model.parameters())
     with pytest.raises(FileExistsError):
         prepare_data(raw_source, output)
+
+
+def test_encoding_canonicalizes_order_before_seeded_shuffle(raw_source, tmp_path):
+    original = prepare_data(raw_source, tmp_path / "original")
+    raw = pl.read_parquet(original / "features_raw.parquet")
+    reordered = tmp_path / "reordered"
+    reordered.mkdir()
+    _encode_requests(raw.sample(fraction=1, shuffle=True, seed=71), reordered, seed=2026)
+    for split in ("train", "valid", "test"):
+        expected = pl.read_parquet(original / f"{split}.parquet")
+        actual = pl.read_parquet(reordered / f"{split}.parquet")
+        assert actual.equals(expected)
+    assert json.loads((original / "schema/feature_meta.json").read_text()) == json.loads(
+        (reordered / "schema/feature_meta.json").read_text()
+    )
 
 
 def test_request_feedback_is_historical_and_pace_ignores_play_duration():

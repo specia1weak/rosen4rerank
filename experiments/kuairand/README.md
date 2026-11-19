@@ -84,6 +84,27 @@ POLARS_MAX_THREADS=4 uv run python -m experiments.kuairand.nxt_continue_v1 \
 得到相同 **0.6978418304**。核对 schema 元数据一致，按 request_id 对齐后 Valid/Test 只有 pace
 浮点值存在差异。该干净目录中 `uv run pytest tests experiments/kuairand/tests -q`：**802 passed**。
 
+### 为什么与旧值不同
+
+已完成配对完整重训：固定同一初始化、seed、batch、421 步、loss、优化器与切分，
+分别只交换物理行序和 pace。
+
+| 物理行序 | pace 数值路径 | Test AUC |
+| --- | --- | ---: |
+| 旧 | 旧 | 0.700267677335224 |
+| 旧 | 新 | 0.7002676706538306 |
+| 新 | 旧 | 0.6978418237152146 |
+| 新 | 新 | 0.6978418303966081 |
+
+按 request_id 对齐后，所有数据列除 pace 浮点舍入外逐值一致，schema 一致。
+旧行序来自历史先验 join 未固定的排列，新链路在 join 后排序再 shuffle；
+相同 seed 对不同输入排列不会得到相同 batch。Train 172 万行仅 1 行位置相同，从首步更新就分叉。
+换回旧行序恢复旧 AUC；pace 的影响约 6.7e-9。本次约 0.002426 的差异由训练行序造成。
+
+当前编码入口明确先固定 session_id、req_idx_raw 顺序再 shuffle，并有打乱原始输入的回归测试，
+避免未来 join 顺序变化再静默改变训练协议。详见
+[审计记录](../../docs/rosen/request_execution/changes/20261119_kr1k-order-reproduction-audit.md)。
+
 测试：
 
 ```bash
