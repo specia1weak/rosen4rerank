@@ -1,7 +1,16 @@
 # Time Budget / Rosen
 
-KR 时间预算实验的代码、报告、数据和训练结果统一放在
-[workspace/kr_time_budget](workspace/kr_time_budget/README.md)。
+KR1K 继续预测的完整复现入口见 [experiments/kuairand/README.md](experiments/kuairand/README.md)。
+从原始 CSV 重新生成数据并训练，不需要下载本人的 workspace：
+
+```bash
+uv sync --locked --group dev
+POLARS_MAX_THREADS=4 uv run python -m experiments.kuairand.run_nxt_continue \
+  --source_dir /path/to/KuaiRand-1K/data --experiment_name raw_weak_epoch1 --device cpu
+```
+
+从原始 CSV 实测 Test AUC **0.6978418304**（约 0.7）；完整 1 epoch / 421 steps。
+实验代码和测试在 `experiments/kuairand/`；数据、报告与训练结果生成到本地 `workspace/kr_time_budget/`。
 以下为迁入的 Rosen 框架说明。
 
 面向多场景推荐实验的 PyTorch 框架，由 betterbole 核心独立迁出。
@@ -15,8 +24,7 @@ uv run pytest
 其他项目中安装：`uv add --editable ../rosen`。
 
 所有导入使用 `rosen`，例如 `from rosen.core.trainers import BaseTrainer`。
-只迁入核心框架及其测试、文档，不包含原项目的 custom_models、实验入口和数据。
-框架原有类名及训练、数据处理语义保持不变。
+仓库包含核心框架、测试、文档和 `experiments/` 实验入口；原始数据与生成产物不纳入版本管理。
 
 文档入口：[API](docs/rosen/API_REFERENCE.md)、[架构](docs/rosen/ARCHITECTURE.md)。
 历史文档中的实验路径用于解释来源，对应实验文件未随包迁入。
@@ -28,15 +36,14 @@ uv run pytest
 
 ## Git 管理约定
 
-版本管理包含框架和实验源码、测试、`uv.lock`、`Argon-plans/` 计划、
-`workspace/kr_time_budget/回复/` 报告及图表，以及维护文档。
+版本管理包含框架和实验源码、测试、`uv.lock`、`Argon-plans/` 计划，以及维护文档。
 `.gitignore` 排除虚拟环境、缓存、IDE 配置、原始数据 `datasource/`、
-KR 实验的 `data/`、`runs/`、`logs/`、checkpoint 和 parquet。
+整个 `workspace/`（含本地报告）、checkpoint 和 parquet。
 这些文件保留在本地；报告中的数据、训练日志和 checkpoint 链接需要对应本地产物才能访问。
 `references/rerank` 是指向本机外部目录的符号链接，也不提交；
 仓库内的参考代码见 `research/projects/LC_MGE_code/`。
 
 新机器使用 `uv sync --group dev` 安装依赖，并按
-[实验运行说明](workspace/kr_time_budget/pipeline/README.md) 准备数据和运行实验。
+[实验运行说明](experiments/kuairand/README.md) 准备数据和运行实验。
 提交前检查 `git status --short`、`git diff --cached --stat` 和
 `git diff --cached --check`；使用 `git status --short --ignored` 查看被忽略的本地产物。

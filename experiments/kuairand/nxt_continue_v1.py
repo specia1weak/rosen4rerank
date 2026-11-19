@@ -1,10 +1,11 @@
 """KR 离开预测模型（rosen 架构重写版）。
 
 数据入口：uv run python -m experiments.kuairand.nxt_continue_v1
-默认产物：workspace/kr_time_budget/data/nxt_continue_v1_aligned/{train,valid,test}.parquet
+默认产物：workspace/kr_time_budget/data/nxt_continue_v1_raw/{train,valid,test}.parquet
 加载：manager, loaders = load_data(DEFAULT_DATA_DIR)
 pace 在预处理时写为 Float32 列 log1p(elapsed_min_raw / req_idx_raw)，模型直接读取。
-历史0.7基线对齐：prepare_baseline_data("workspace/kr_time_budget/data/v6_current_feedback", DEFAULT_DATA_DIR)
+完整 CSV -> 训练入口与说明见 experiments/kuairand/README.md。
+prepare_baseline_data 仅用于已有历史 v6 产物的审计，不是新机器的前置条件。
 当前刷四项反馈作为 Float32 辅助列进入内容塔；默认加载时编码 UID=0。
 
 核心分解：
@@ -20,6 +21,7 @@ import argparse
 import hashlib
 import json
 import math
+import platform
 import shutil
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -72,7 +74,7 @@ FEATURES = (
 )
 TRAIN_END = 20220506
 SPLITS = ("train", "valid", "test")
-DEFAULT_DATA_DIR = Path("workspace/kr_time_budget/data/nxt_continue_v1_aligned")
+DEFAULT_DATA_DIR = Path("workspace/kr_time_budget/data/nxt_continue_v1_raw")
 FEEDBACK_FIELDS = ["current_click_rate", "current_longview_rate", "current_positive_rate", "current_hate_rate"]
 
 
@@ -339,6 +341,14 @@ def _prepare_data(source: Path, output: Path, log_paths: list[Path], seed: int) 
     }
 
 
+def _source_record(path: Path) -> dict:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {"name": path.name, "bytes": path.stat().st_size, "sha256": digest.hexdigest()}
+
+
 def prepare_data(source: Path | str, output: Path | str, *, seed: int = 2026) -> Path:
     """独立从 KR-1K raw CSV 构建数据；写日志并拒绝复用非空输出目录。"""
     source, output = Path(source), Path(output)
@@ -354,7 +364,15 @@ def prepare_data(source: Path | str, output: Path | str, *, seed: int = 2026) ->
     (output / "logs").mkdir()
     print("数据处理日志：", output / "logs/prepare.log", flush=True)
     with (output / "logs/prepare.log").open("w") as log, redirect_stdout(log), redirect_stderr(log):
+        input_files = [*log_paths, source / "video_features_basic_1k.csv", source / "user_features_1k.csv"]
+        print("HASH raw CSV inputs", flush=True)
+        input_records = [_source_record(path) for path in input_files]
         manifest = _prepare_data(source, output, log_paths, seed)
+        manifest["build"] = {
+            "kind": "raw_csv", "inputs": input_records,
+            "preprocessor_sha256": _source_record(Path(__file__))["sha256"],
+            "python": platform.python_version(), "polars": pl.__version__, "torch": torch.__version__,
+        }
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
         print("DATA READY", output, flush=True)
     return output
@@ -412,6 +430,14 @@ def prepare_baseline_data(source: Path | str, output: Path | str) -> Path:
 def load_data(data_dir: Path | str, *, batch_size: int = 4096, zero_uid: bool = True) -> tuple[SchemaManager, dict[str, DataLoader]]:
     """读取预处理产物；ParquetStreamDataset 已产出 batch，pace 自动随 schema 加载。"""
     data_dir = Path(data_dir)
+    required = ["manifest.json", "schema/feature_meta.json", *[f"{s}.parquet" for s in SPLITS]]
+    missing = [name for name in required if not (data_dir / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Incomplete prepared dataset at {data_dir}: missing {', '.join(missing)}. "
+            "Generate it from raw CSV with: uv run python -m experiments.kuairand.run_nxt_continue "
+            f"--source_dir /path/to/KuaiRand-1K/data --data_dir {data_dir} --device cpu"
+        )
     manager = build_schema(data_dir / "schema")
     manager.load_schema()
     loaders = {}

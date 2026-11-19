@@ -8,7 +8,7 @@ from experiments.kuairand.nxt_continue_v1 import (
     FEEDBACK_FIELDS, TimeBudgetExitModel, load_data, prepare_baseline_data, prepare_data,
 )
 from experiments.kuairand.tests.test_nxt_continue_data import raw_source
-from workspace.kr_time_budget.pipeline.current_feedback import CurrentFeedbackExitModel
+from experiments.kuairand.pipeline.current_feedback import CurrentFeedbackExitModel
 
 
 def test_frozen_data_order_pace_and_weak_loss_match_history(raw_source, tmp_path):

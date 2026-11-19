@@ -15,7 +15,7 @@ class DatasetBase:
         os.path.expandvars(
             os.environ.get(
                 "ROSEN_DATASOURCE_ROOT",
-                os.environ.get("ROSEN_DATA_DIR", "/Users/lxogri/Developer/pyprojects/time-budget/datasource"),
+                os.environ.get("ROSEN_DATA_DIR", str(Path.cwd() / "datasource")),
             )
         )
     ).expanduser()

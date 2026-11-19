@@ -1,6 +1,9 @@
 """KuaiRand请求级继续预测参考实现。
 
-阅读顺序（模块均位于pipeline）：
+新机器直接运行：见 README.md，run_nxt_continue --source_dir 接收原始 CSV，完成预处理、训练和 Test。
+nxt_continue_v1.py 是独立 raw -> dataset / 模型实现，不需要历史 workspace。
+
+历史参考实现阅读顺序（下列模块位于pipeline）：
 1. build_requests.py的sessionize：原始事件切场、按六视频构造请求。
 2. build_requests_v3.py：前序反馈、历史先验、候选内容、时间切分和schema编码。
 3. build_timestamp_data.py：将历史播放时长口径更正为纯事件时间戳。

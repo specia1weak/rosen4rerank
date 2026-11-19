@@ -1,6 +1,8 @@
 """KR 逐刷继续预测训练、最终 Test 评估及开场预算命中率。
 
-uv run python -m experiments.kuairand.run_nxt_continue --experiment_name aligned_weak_epoch1
+从原始 CSV 重新生成数据并训练（不需要任何历史 workspace）：
+uv run python -m experiments.kuairand.run_nxt_continue --source_dir /path/to/KuaiRand-1K/data --experiment_name raw_weak_epoch1 --device cpu
+已有预处理数据时，省略 source_dir 并用 data_dir 指定目录。
 uv run python -m experiments.kuairand.run_nxt_continue --experiment_name structured_epoch1 --structured True
 uv run python -m experiments.kuairand.run_nxt_continue --experiment_name single_epoch1 --num_components 1
 uv run python -m experiments.kuairand.run_nxt_continue --experiment_name fusion_epoch1 --model_type fusion
@@ -34,7 +36,7 @@ from rosen.experiment.param import ConfigBase, ParamManager, seed_everything
 from rosen.utils.optimize import split_model_params_by_decay
 
 from experiments.kuairand.nxt_continue_v1 import (
-    DEFAULT_DATA_DIR, FusionExitModel, TimeBudgetExitModel, WeibullHead, load_data,
+    DEFAULT_DATA_DIR, FusionExitModel, TimeBudgetExitModel, WeibullHead, load_data, prepare_data,
 )
 
 
@@ -42,6 +44,7 @@ from experiments.kuairand.nxt_continue_v1 import (
 class ExitExperimentConfig(ConfigBase):
     dataset_name: str = "kr_nxt_continue_v1"
     data_dir: str = str(DEFAULT_DATA_DIR)
+    source_dir: str = ""
     run_root: str = "workspace/kr_time_budget/runs/nxt_continue_v1"
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     max_epochs: int = 1
@@ -203,6 +206,9 @@ def run_experiment(cfg: ExitExperimentConfig) -> dict:
         print(cfg, flush=True)
         start_time = time.monotonic()
         data_dir = Path(cfg.data_dir)
+        if cfg.source_dir:
+            print("从原始 CSV 生成数据：", cfg.source_dir, "->", data_dir, flush=True)
+            prepare_data(cfg.source_dir, data_dir, seed=cfg.seed)
         manager, loaders = load_data(data_dir, batch_size=cfg.batch_size, zero_uid=cfg.zero_uid)
         manifest_path = data_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text())
@@ -259,4 +265,4 @@ def run_experiment(cfg: ExitExperimentConfig) -> dict:
 
 if __name__ == "__main__":
     change_root_workdir()
-    run_experiment(ParamManager(ExitExperimentConfig).build(experiment_name="aligned_weak_epoch1"))
+    run_experiment(ParamManager(ExitExperimentConfig).build(experiment_name="raw_weak_epoch1"))

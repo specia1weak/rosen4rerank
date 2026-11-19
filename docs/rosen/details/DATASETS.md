@@ -8,10 +8,11 @@
 
 ```python
 class DatasetBase:
-    SYSTEM_DATA_DIR = Path("D:/pyprojects/recommend-study/Datasets/")
+    SYSTEM_DATA_DIR = Path(os.environ.get("ROSEN_DATASOURCE_ROOT", Path.cwd() / "datasource"))
 ```
 
-这个路径是硬编码的。文档层面要把它看成“数据根目录约定”，不是通用下载逻辑。
+默认使用启动目录下的 `datasource/`，可由 `ROSEN_DATASOURCE_ROOT` 指定；不依赖开发者本机绝对路径。
+KR1K 完整入口也可直接用 `--source_dir /path/to/KuaiRand-1K/data` 指定原始 CSV。
 
 ## 2. 当前可用的数据集对象
 
