@@ -37,7 +37,7 @@
   - 再读 [`ADD_MSR_MODEL_AND_VERIFY.md`](ADD_MSR_MODEL_AND_VERIFY.md)
 - 我想理解数据在框架里怎么流动
   - 读 [`DATA_FLOW.md`](DATA_FLOW.md)
-  - 需要一份保留完整核心源码的单文件阅读包：[`repomix/rosen-core.md`](repomix/rosen-core.md)，导读和重新生成命令见 [`repomix/README.md`](repomix/README.md)
+  - 需要保留完整核心源码及 KR1K 示例的阅读包：[`repomix/rosen-core.md`](repomix/rosen-core.md)，附 [CTR + 长播多任务](repomix/kr1k-multitask.md)、[六视频重排](repomix/kr1k-rerank.md)、[原始 KR1K](repomix/kr1k-original.md)；导读和重新生成命令见 [`repomix/README.md`](repomix/README.md)
 - 我想理解训练、评估、早停、checkpoint 怎么串起来
   - 读 [`TRAINING_FLOW.md`](TRAINING_FLOW.md)
 - 我已经知道自己要找哪个类或模块，只想按源码查入口
@@ -87,6 +87,7 @@
 - [`details/EMB.md`](details/EMB.md)
 - [`details/EVALUATE.md`](details/EVALUATE.md)
 - [`details/MODELS.md`](details/MODELS.md)
+- [`details/RERANK.md`](details/RERANK.md)：MultiGE、列表算子、共享梯度与参考实现差异。
 - [`details/EXPERIMENT.md`](details/EXPERIMENT.md)
 - [`details/UTILS.md`](details/UTILS.md)
 - [`details/DATASETS.md`](details/DATASETS.md)

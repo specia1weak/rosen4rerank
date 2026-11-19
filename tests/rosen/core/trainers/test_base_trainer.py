@@ -10,7 +10,7 @@ import torch
 
 from rosen.core.train import EarlyStopper, TrainerComponents, TrainerDataLoaders
 from rosen.core.trainers import BaseTrainer, BaseTrainerWithLife
-from rosen.evaluate.evaluator import Evaluator
+from rosen.evaluate.evaluator import PointwiseEvaluator
 from rosen.evaluate.manager import EvaluatorManager
 from rosen.models.base import BaseModel
 from tests.support.model_fixtures import DummyCls
@@ -104,7 +104,7 @@ def test_base_trainer_does_not_run_obp_cut_audit():
     model = BaseToyModel()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
     evaluator = EvaluatorManager()
-    evaluator.register("overall", Evaluator("auc", "logloss"))
+    evaluator.register("overall", PointwiseEvaluator("auc", "logloss"))
     cfg = SimpleNamespace(device="cpu", train_log_interval=100, max_epochs=1, ckpt_dir="")
     trainer = BaseTrainer(
         model,
@@ -156,7 +156,7 @@ def test_base_trainer_uses_test_loader_and_named_timer_component():
     )
     model = BaseToyModel()
     evaluator = EvaluatorManager()
-    evaluator.register("overall", Evaluator("auc"))
+    evaluator.register("overall", PointwiseEvaluator("auc"))
     timer = RecordingTimer()
     trainer = BaseTrainer(
         model,

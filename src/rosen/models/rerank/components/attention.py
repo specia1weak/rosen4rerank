@@ -4,6 +4,12 @@ import torch
 from torch import nn
 
 
+def masked_softmax(logits, valid):
+    """Zero weights for empty rows as well as masked keys."""
+    weights = logits.masked_fill(~valid, torch.finfo(logits.dtype).min).softmax(-1) * valid
+    return weights / weights.sum(-1, keepdim=True).clamp_min(torch.finfo(logits.dtype).tiny)
+
+
 class _Attention(nn.Module):
     def __init__(self, num_tokens, emb_dim, scale=8.0):
         super().__init__()

@@ -102,7 +102,21 @@ scores = self.predict_step(batch_interaction)
 return self.model.predict(batch_interaction)
 ```
 
-所以评估语义最终由 `model.predict()` 决定。
+所以评估语义最终由 `model.predict()` 决定。内置 MSR/unified 统一通过 `logits(interaction)`
+提供训练原始分，基类 predict 返回 sigmoid 概率 Tensor；训练损失不调用 predict。
+
+预测返回 Tensor 或 Prediction。Trainer 在实际模型预测之后统一将裸 Tensor 包装为
+`Prediction(scores=..., target=model.LABEL)`；EMA teacher 同样经过此边界。
+EvaluatorManager 自动绑定 schema，按注册 target 或 Prediction.target 配对标签与输出、推导 mask，
+过滤后由 BatchResolver 执行 Scorer，统一构造纯张量 EvalBatch，再调用 collect。PointwiseEvaluator
+负责有效样本展平，RankingEvaluator 自动评价 scores 或 order，SlateValueEvaluator 评价已对齐整刷价值；自定义来源在
+Resolver 中解析，指标继承 BaseEvaluator，无模型侧自定义 eval-step 协议。
+详见 [评估接口](details/EVALUATE.md)。
+
+重排输出中，Prediction.candidates 是类型化 CandidatePool，chosen_scores 为与最终 order 对齐的预测。
+BatchResolver.for_candidates() 评价主候选；默认 slate 评价使用显式选中分数。
+候选池模型缺 chosen_scores 时直接报错，不能将原序 OCPM 分数按 order gather 后用于整刷预测。
+独立推理和训练后导出统一调用 resolve_chosen_scores()，子类通过 with_extra() 添加诊断。
 
 ## 5. 这为什么重要
 
@@ -304,3 +318,10 @@ trainer = BaseTrainerWithLife(..., components=components, ...)
 - 评估模块细节：[`details/EVALUATE.md`](details/EVALUATE.md)
 - 整体链路：[`ARCHITECTURE.md`](ARCHITECTURE.md)
 - 健康快照完整设计：[`OBSERVATORY_HEALTH_SNAPSHOT_DESIGN.md`](OBSERVATORY_HEALTH_SNAPSHOT_DESIGN.md)
+
+## 评估阶段和 checkpoint 路径
+
+EvaluatorManager.summary(epoch, step, stage=...) 将 valid/test 写入日志头。
+BaseTrainer.best_checkpoint_path 和 last_checkpoint_path 保存 save_checkpoint 的真实返回路径；
+实验调用方直接使用该路径，不能从 epoch 和“预计每轮步数”重建文件名。
+KR 重排早停为 chosen_order.ndcg@6，ML1M 为 ranking.ndcg@6；选好 checkpoint 后才执行 test。

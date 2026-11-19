@@ -1,4 +1,4 @@
 """Batch input/output contracts."""
-from .prediction import Prediction
+from .prediction import CandidatePool, Prediction
 
-__all__ = ["Prediction"]
+__all__ = ["CandidatePool", "Prediction"]

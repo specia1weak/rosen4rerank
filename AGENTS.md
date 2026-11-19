@@ -38,6 +38,7 @@
 
 ## 执行约定
 
+- 不兼容旧代码：接口调整直接删除旧名称、旧参数和旧取值，并统一迁移仓库内调用；不得添加兼容别名、fallback、双参数入口或仅告警仍可用的弃用层。一个概念只保留一个规范名。
 - 使用 `uv` 执行项目命令：`uv run python ...`、`uv run pytest ...`。
 - 本包维护命令默认在仓库根目录运行。实验命令在调用方项目根目录运行；`change_root_workdir()` 使用 `rosen.experiment.ROOT_DIR`，默认是启动时的工作目录，可通过 `ROSEN_ROOT_DIR` 指定。
 - 长训练、长预处理、需要持续观察的任务显式写日志到 `workspace/.../logs/` 或 `logs/`。

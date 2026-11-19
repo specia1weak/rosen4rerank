@@ -136,10 +136,21 @@ ds = RawParquetStreamDataset(
 ```python
 FeatureContext.from_manager(manager)
 FeatureContext.from_raw_manager(manager)
+# 独立推理：读取同一套输入和 mask，不要求标签列存在。
+FeatureContext.from_manager(manager, include_labels=False)
 ```
 
 - `from_manager()` 用于已经编码好的数据。
 - `from_raw_manager()` 用于原始数据，需要同时推导读入列和输出列。
+  它由 RawParquetStreamDataset 实际使用：读入 `manager.raw_fields()`，输出 `manager.fields()`。
+  例如 history_len 由 transform 生成，不应要求原始 parquet 包含此列。
+- 两个工厂都支持关键字 `include_labels=False`：从读入列和输出列排除全部
+  `manager.label_fields`，保留关联的 `mask_fields`、AuxField 和其他上下文列。
+  不补造标签，也不根据 parquet 是否有标签自动切换训练/推理语义。
+- 正式辅助输入在 `SchemaManager(aux_fields=[AuxField(...)])` 中声明名称、类型和长度，
+  dataset 与独立推理共用其读取及格式化规则，无需重复 `extra_col_names` 或 formatter。
+- 列名保存为 tuple；额外 formatter 映射复制后设为只读，防止调用方修改原 dict 影响上下文。
+  上下文支持 pickle 和 DataLoader spawn；它仍引用原 manager，不会深度冻结 manager 或自定义 formatter。
 
 ### `TensorFormatter`
 
@@ -148,9 +159,15 @@ formatter = TensorFormatter(context)
 interaction = formatter.format(batch_dict)
 ```
 
-它会根据每个字段对应的 `EmbSetting.get_formatters()` 把 numpy / list 转成 tensor，再包成 `Interaction`。
+它调用 `manager.get_formatters()` 获取统一的特征、SlateLabel 和 AuxField 规则，
+再合并 `extra_col_formatters`（优先级最高），把 numpy / list 转成 tensor 并包成 `Interaction`。
+正式规则由各声明的 `get_formatters()` 产生；不探测残缺 manager 是否提供可选方法。
+推理上下文保留同一套掩码与辅助字段格式化规则。
 
 ## 9. Formatter 类型
+
+规范定义在 [`core/formatters.py`](../../../src/rosen/core/formatters.py)，只依赖 NumPy/Torch。
+按本轮明确要求，原公共类和常量仍从 `data.padding` re-export，指向同一对象。
 
 - `DenseFormatter`
 - `VectorDenseFormatter`
@@ -164,5 +181,9 @@ interaction = formatter.format(batch_dict)
 
 - `VectorDenseFormatter` 会固定到 `dim`，超长截断，短的补 0。
 - `PaddedNestedSequenceFormatter` 用于嵌套 list，例如“标签序列的序列”。
+- 序列 formatter 的 `truncate_mode="head"/"tail"` 分别保留头部/尾部，默认保留尾部，
+  与左右 padding 无关。`SequenceSetting` 把自身方向同时传给元素与时间列 formatter。
+- `MultiSparseSetting` 固定保留标签头部，与 Polars `list.head(max_tag_len)` 一致；
+  嵌套 formatter 的外层按序列方向截断，内层由 `tag_truncate_mode` 独立控制（默认 head）。
 - `FallbackFormatter` 只是兜底，不要拿它当正式 schema 规则。
 

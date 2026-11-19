@@ -1,0 +1,243 @@
+"""Compatibility embedding/profile APIs; new models use OmniEmbLayer views."""
+from typing import Dict, Iterable, List, Union
+
+import numpy as np
+import pandas as pd
+import torch
+from torch import nn
+
+from rosen.core.enum_type import FeatureSource
+from rosen.core.interaction import Interaction
+from rosen.emb.schema import EmbSetting, MultiSparseSetting
+from .emblayer import RecEmbedding, SPLIT_METHODS
+
+
+class BoleEmbLayer(nn.Module):
+    def __init__(self, emb_settings: Iterable[EmbSetting]):
+        super(BoleEmbLayer, self).__init__()
+        self.settings: List[EmbSetting] = list(emb_settings)
+        self.emb_modules = nn.ModuleDict()
+        self.source2settings: Dict[FeatureSource, List[EmbSetting]] = {}
+
+        for setting in self.settings:
+            if self.source2settings.get(setting.source) is None:
+                self.source2settings[setting.source] = []
+            self.source2settings[setting.source].append(setting)
+
+            if setting.requires_embedding_module and setting.embedding_field_name not in self.emb_modules:
+                self.emb_modules[setting.embedding_field_name] = RecEmbedding(
+                    num_embeddings=setting.num_embeddings,
+                    embedding_dim=setting.embedding_dim,
+                    padding_idx={True: 0, False: None}[setting.padding_zero]
+                )
+
+    def forward(self, interaction, split_by: SPLIT_METHODS="none") -> Union[Dict[Union[str, FeatureSource], torch.Tensor], torch.Tensor]:
+        split_by = split_by.lower() if isinstance(split_by, str) else None
+        if split_by not in ("source", "name", "none", None):
+            raise ValueError
+
+        output_embs = {}
+        for source, settings in self.source2settings.items():
+            if not settings:
+                continue
+            emb_list = []
+            for setting in settings:
+                emb = setting.compute_tensor(interaction, self.emb_modules)
+                emb_list.append([setting.field_name, emb])
+
+            if emb_list:
+                if split_by == "source":
+                    output_embs[source] = torch.cat([emb for name, emb in emb_list], dim=-1)
+                elif split_by == "name":
+                    for name, emb in emb_list:
+                        output_embs[name] = emb
+                else:
+                    output_embs["all"] = output_embs.get("all", [])
+                    output_embs["all"].extend([emb for name, emb in emb_list])
+
+        if split_by is None or split_by == "none":
+            if output_embs.get("all", None) is None:
+                return None
+            else:
+                return torch.cat(output_embs.get("all"), dim=-1)
+        else:
+            return output_embs
+
+
+class SideEmb(nn.Module):
+    def __init__(self, all_settings: Iterable[EmbSetting],
+                 target_sources: Union[FeatureSource, Iterable[FeatureSource]]=None):
+        super(SideEmb, self).__init__()
+
+        # 处理单 Source 和多 Source 的兼容
+
+        if target_sources is not None:
+            if not isinstance(target_sources, Iterable):
+                target_sources = [target_sources]
+            # 核心逻辑：过滤出属于自己这一侧的 settings
+            side_settings = [s for s in all_settings if s.source in target_sources]
+        else:
+            side_settings = all_settings
+
+        self.target_sources = target_sources  # 转为 tuple 方便后续固定顺序遍历
+        self.embedding = BoleEmbLayer(side_settings)
+        self.embedding_size = sum([s.embedding_dim for s in side_settings])
+
+    def forward(self, interaction, split_by: SPLIT_METHODS="none") -> Union[torch.Tensor, Dict[FeatureSource, torch.Tensor]]:
+        # 直接把大宽表吐出的 interaction 传给底层
+        emb_dict = self.embedding(interaction, split_by)
+        return emb_dict
+
+
+class UserSideEmb(SideEmb):
+    VALID_SOURCE = (FeatureSource.USER_ID, FeatureSource.USER)
+
+    def __init__(self, all_settings: Iterable[EmbSetting]):
+        super().__init__(all_settings, self.VALID_SOURCE)
+
+
+class ItemSideEmb(SideEmb):
+    VALID_SOURCE = (FeatureSource.ITEM_ID, FeatureSource.ITEM)
+
+    def __init__(self, all_settings: Iterable[EmbSetting]):
+        super().__init__(all_settings, self.VALID_SOURCE)
+
+
+class InterSideEmb(SideEmb):
+    VALID_SOURCE = (FeatureSource.INTERACTION,)
+
+    def __init__(self, all_settings: Iterable[EmbSetting]):
+        super().__init__(all_settings, self.VALID_SOURCE)
+
+
+class CustomSideEmb(SideEmb):
+    def __init__(self, all_settings: Iterable[EmbSetting]):
+        super().__init__(all_settings)
+
+
+class ProfileEncoder(nn.Module):
+    """
+    全自动静态画像编码器：告别硬编码，完全数据驱动！
+    """
+
+    def __init__(self, settings: List['EmbSetting'], profile_path: str,
+                 id_source: FeatureSource, feature_source: FeatureSource):
+        super().__init__()
+
+        # 1. 解析图纸：找出谁是主键 (ID)，谁是属性 (Features)
+        self.id_setting = next((s for s in settings if s.source == id_source), None)
+        if not self.id_setting:
+            raise ValueError(f"在 settings 中未找到主键源: {id_source}")
+
+        self.feature_settings = [s for s in settings if s.source == feature_source]
+        self.feature_names = [s.field_name for s in self.feature_settings]
+
+        # 2. 初始化底层 Embedding 层 (直接复用你写好的 SideEmb)
+        self.side_emb = SideEmb(settings, target_sources=[id_source, feature_source])
+
+        # 3. 读取静态宽表
+        df = pd.read_parquet(profile_path)
+
+        # 4. 构建地基 (最大 ID 决定了查找表的行数)
+        id_col = self.id_setting.field_name
+        num_entities = df[id_col].max() + 1
+        entity_ids = torch.tensor(df[id_col].astype(np.int64).values, dtype=torch.long)
+
+        # 5. 全自动装配流水线
+        for setting in self.feature_settings:
+            field = setting.field_name
+
+            # --- 分支 A：处理变长序列特征 (必须 Padding) ---
+            if isinstance(setting, MultiSparseSetting):
+                max_len = getattr(setting, 'max_tag_len', 50)
+                padded_matrix = self._pad_sequences(df[field], max_len)
+
+                # 初始化空矩阵 [num_entities, max_len]
+                buffer_tensor = torch.zeros((num_entities, max_len), dtype=torch.long)
+                vals = torch.tensor(padded_matrix, dtype=torch.long)
+
+            # --- 分支 B：处理单值特征 ---
+            else:
+                # 初始化一维向量 [num_entities]
+                buffer_tensor = torch.zeros(num_entities, dtype=torch.long)
+                clean_series = df[field].fillna(0).astype(np.int64)
+                vals = torch.tensor(clean_series.values, dtype=torch.long)
+
+            # 散列赋值：自动对齐坑位 (完美解决残缺错位问题)
+            buffer_tensor[entity_ids] = vals
+
+            # 动态注册为模型的 Buffer (名字比如: buf_tag, buf_author_id)
+            self.register_buffer(f"buf_{field}", buffer_tensor)
+
+    def _pad_sequences(self, series: pd.Series, max_len: int, pad_val: int = 0) -> np.ndarray:
+        """高性能 Numpy 序列补齐工具，自带数据清洗"""
+        padded = np.full((len(series), max_len), pad_val, dtype=np.int64)
+        for i, seq in enumerate(series):
+            # 防御由于 left join 产生的 NaN/None
+            if seq is None or (isinstance(seq, float) and np.isnan(seq)) or len(seq) == 0:
+                continue
+
+            valid_len = min(len(seq), max_len)
+            # 【核心修复】不仅截断，还要强制清洗内部元素的类型为 int64
+            padded[i, :valid_len] = np.array(seq[:valid_len], dtype=np.int64)
+
+        return padded
+
+    def forward(self, query_ids: torch.Tensor, split_by: SPLIT_METHODS= "none"):
+        """
+        前向传播：根据传入的 query_ids (比如一串 item_id)，
+        瞬间从缓存中拉出所有特征，组装成 interaction 字典，喂给 SideEmb。
+        """
+        # 1. 构建虚拟 Interaction 字典
+        interaction = {self.id_setting.field_name: query_ids}
+        # 2. 动态查表
+        for field in self.feature_names:
+            # 取出注册好的 Buffer 矩阵
+            buffer_tensor = getattr(self, f"buf_{field}")
+            interaction[field] = buffer_tensor[query_ids]
+
+        # 3. 完美接入你的 SideEmb
+        return self.side_emb(interaction, split_by=split_by)
+
+
+class UserProfileEncoder(ProfileEncoder):
+    ID_SOURCE = FeatureSource.USER_ID
+    FEATURE_SOURCE = FeatureSource.USER
+    def __init__(self, settings: List['EmbSetting'], profile_path: str,):
+        super().__init__(settings, profile_path,
+                         id_source=self.ID_SOURCE, feature_source=self.FEATURE_SOURCE)
+
+
+class ItemProfileEncoder(ProfileEncoder):
+    ID_SOURCE = FeatureSource.ITEM_ID
+    FEATURE_SOURCE = FeatureSource.ITEM
+    def __init__(self, settings: List['EmbSetting'], profile_path: str,):
+        super().__init__(settings, profile_path,
+                         id_source=self.ID_SOURCE, feature_source=self.FEATURE_SOURCE)
+
+
+class SeqEmbedder(nn.Module):
+    def __init__(self, seq_field_name, settings: List[EmbSetting], profile_encoder: ProfileEncoder):
+        super().__init__()
+        self.settings = settings
+        filtered_list = [setting for setting in settings if setting.field_name == seq_field_name]
+        if len(filtered_list) != 1:
+            raise ValueError
+        self.id_setting = filtered_list[0]
+        if not isinstance(self.id_setting, SequenceSetting):
+            raise ValueError
+        self.id_setting: SequenceSetting = self.id_setting
+        self.seq_field_name = seq_field_name
+        self.seq_len_field_name = self.id_setting.seq_len_field_name
+
+        self.profile_encoder = profile_encoder
+
+    def forward(self, interaction: Interaction, split_by: SPLIT_METHODS="none"):
+        inter_dict = interaction.interaction
+        seq = inter_dict[self.seq_field_name]
+        seq_len = inter_dict[self.seq_len_field_name]
+        emb_seq = self.profile_encoder.forward(seq, split_by)
+        return emb_seq, seq_len
+
+
+__all__ = ['BoleEmbLayer', 'SideEmb', 'UserSideEmb', 'ItemSideEmb', 'InterSideEmb', 'CustomSideEmb', 'ProfileEncoder', 'UserProfileEncoder', 'ItemProfileEncoder', 'SeqEmbedder']

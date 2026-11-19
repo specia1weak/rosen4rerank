@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 from rosen.core.enum_type import FeatureSource
+from rosen.core.formatters import ColumnFormatter, IntFormatter, PaddedIntSequenceFormatter, TruncateMode
 
 from .base import EmbSetting, EmbType, SeqGroupConfig
 from .utils import NULL_FALLBACK
@@ -75,7 +76,7 @@ class SequenceSetting(EmbSetting):
         field_name: str,
         element_setting: EmbSetting,
         group: SeqGroupConfig,
-        truncate_mode: str = "tail",
+        truncate_mode: TruncateMode = "tail",
         is_string_format: bool = False,
         separator: str = ",",
     ):
@@ -197,18 +198,17 @@ class SequenceSetting(EmbSetting):
             exprs.append(time_expr)
         return exprs
 
-    def get_formatters(self) -> Dict[str, "ColumnFormatter"]:
-        from rosen.data.padding import IntFormatter, PaddedIntSequenceFormatter
-
+    def get_formatters(self) -> Dict[str, ColumnFormatter]:
         element_formatter = next(
             iter(
                 self.element_setting.get_sequence_formatters(
                     max_len=self.max_len,
                     padding_side=self.padding_side,
+                    truncate_mode=self.truncate_mode,
                 ).values()
             )
         )
-        formatters = {
+        formatters: Dict[str, ColumnFormatter] = {
             self.field_name: element_formatter,
             self.seq_len_field_name: IntFormatter(),
         }
@@ -216,6 +216,7 @@ class SequenceSetting(EmbSetting):
             formatters[self.time_field_name] = PaddedIntSequenceFormatter(
                 max_len=self.max_len,
                 padding_side=self.padding_side,
+                truncate_mode=self.truncate_mode,
             )
         return formatters
 

@@ -33,10 +33,15 @@ raw parquet / lazyframe
 
 ### L1: 基础抽象
 
+- [`core/formatters.py`](../../src/rosen/core/formatters.py)
+  - 只依赖 NumPy/Torch 的列转换与 padding 原语，不导入 `emb` 或 `data`。
 - [`core/enum_type.py`](../../src/rosen/core/enum_type.py)
   - `FeatureSource`、`InputType`、`EvaluatorType` 等基础枚举。
 - [`core/interaction.py`](../../src/rosen/core/interaction.py)
   - batch 级别的 tensor 容器，训练和评估都围绕它传递。
+- [`core/prediction.py`](../../src/rosen/core/prediction.py)
+  - Prediction 区分原序 scores、最终 order、选中 chosen_scores 和类型化 CandidatePool；extra 仅承载诊断。
+  - 切片、设备迁移和 with_extra 都保留类型化字段，resolve_chosen_scores 统一选中得分解析。
 - [`utils/`](../../src/rosen/utils)
   - 负采样、时序序列构造、优化器分组、时间桶、可视化等杂项工具。
 - [`datasets/`](../../src/rosen/datasets)
@@ -50,6 +55,8 @@ raw parquet / lazyframe
   - 负责 `fit / transform / split / save / load` 的总调度。
 - [`emb/emblayer.py`](../../src/rosen/emb/emblayer.py)
   - `OmniEmbLayer` 把当前 batch 的 `Interaction` 转成模型可用的 embedding。
+  - 输出布局由 `split_by` 选择；`stack` 保留字段轴 `[B, ..., F, D]`，不解释重排、历史页面等任务语义。
+    页面折叠、排列及监督仍由后续模型与实验代码决定。
 - [`data/dataset.py`](../../src/rosen/data/dataset.py)
   - 流式扫描 parquet，按 worker 分片、shuffle、format，最终产出 `Interaction`。
 - [`data/profile.py`](../../src/rosen/data/profile.py)
@@ -59,9 +66,13 @@ raw parquet / lazyframe
 ### L3: 评估
 
 - [`evaluate/evaluator.py`](../../src/rosen/evaluate/evaluator.py)
-  - 单个 evaluator，内部组合 point-wise / top-k evaluator。
+  - 一个抽象基类与 Pointwise/Ranking/SlateValue/Retrieval 四个核心评价器，均消费纯张量，只提供规范名。
+  - Pointwise 负责曝光指标；Ranking 负责请求内排序；SlateValue 负责整刷/候选价值与 OPE；Retrieval 负责全库召回。
 - [`evaluate/manager.py`](../../src/rosen/evaluate/manager.py)
-  - 多 evaluator 注册表，支持按 domain 过滤后分别汇总。
+  - 多 evaluator 注册表，通过 target 同时选择预测与标签、由 schema 推导 mask，并按 domain 行过滤后分别汇总。
+  - 行过滤后由 BatchResolver/Scorer 解析与投射，EvalBatch 只有 labels/scores/ref_scores/order/mask/users/full_scores 张量。
+  - Scorer 通过 uses_schema_labels、needs_target(pred)、uses_prediction_target(pred) 声明依赖；Manager/Resolver 不探测具体 Scorer 类型或字段。
+  - 同一次 collect 复用相同过滤器实例的筛选结果及相同 Tensor 的 CPU 副本；跨 batch 缓存为独立 NumPy 数组，summary 时拼接。
 
 ### L4: 模型
 
@@ -73,6 +84,12 @@ raw parquet / lazyframe
   - 共享底座、MMoE、PLE、STAR 等主要多场景实现都在这里或其子目录里。
 - [`models/msr/components/heads.py`](../../src/rosen/models/msr/components/heads.py)
   - `DomainTowerHead` 把共享表征映射到 domain-specific logit。
+- [`models/rerank/`](../../src/rosen/models/rerank)
+  - 独立的 `RerankModel`、排列算子与 MultiGE 模型族，共享 attention 和可配置生成器目标。
+  - 模型 `predict()` 返回语义 Prediction；outputs_candidate_pool 声明主候选池能力，候选池和选中得分是类型化字段，不扩展 Trainer 协议。
+    数据形状、梯度边界及参考实现差异见 [RERANK](details/RERANK.md)。
+  - SlateRerankModel 统一 encode_slate → 分块候选 → _score_encoded，显式传入 mask；
+    OCPMRerankModel 共享预编码历史页，KuaiShou 共享历史表示及 K/V，不逐候选构造 Interaction。
 
 ### L5: 训练
 
@@ -123,9 +140,26 @@ core.train -/-> core.trainers
 - 所有 `setting.get_output_field_names()`
 - `time_field`
 - `label_fields`
+- `mask_fields`（来自 `SlateLabel` 的关联监督掩码）
 - `domain_fields`
+- `aux_fields`（无需拟合/嵌入的类型化模型输入及原始 ID）
 
 统一加入输出列集合。后面的 dataset formatter 和 trainer 都默认按这个结构工作。
+列表监督由 `SlateLabel` 声明，和特征序列组分开管理；它只决定标签及掩码如何进入 batch，
+不规定 loss 或评估口径。共享原子 setting 的拟合以第一个注册来源为准，不自动并入其他序列。
+训练 dataset 与独立推理均从 manager 构建 FeatureContext；推理显式使用
+`include_labels=False` 排除标签并保留关联 mask，辅助输入不再另行声明名称或 formatter。
+
+`manager.raw_fields()` 查询转换前所需的原始列，`manager.get_formatters()` 汇总各 setting、
+SlateLabel 和 AuxField 的转换规则；`fields()` / `raw_fields()` 均支持 `include_labels=False`。
+`FeatureContext.from_raw_manager()` 服务于 RawParquetStreamDataset 的在线 transform：
+例如原始文件只有 history，history_len 在转换后才生成，不能按输出列集合提前读取。
+
+格式化依赖方向固定为 `data/padding -> emb -> core/formatters`，data 也可直接使用原语。
+各特征声明负责选择 formatter，TensorFormatter 只合并 manager 规则与显式覆盖，再执行转换。
+特征 formatter 不再反向导入 data，也不需要函数内导入规避循环。
+`SequenceSetting.truncate_mode` 同时控制序列元素与时间列；MultiSparse 内层标签始终保留头部，
+与 Polars `list.head(max_tag_len)` 一致。详见 [数据契约](details/DATA.md)。
 
 ### 2. 模型前向依赖 `Interaction`
 
@@ -144,7 +178,13 @@ logits = self.backbone(x, domain_ids)
 `BaseTrainer` 不区分“训练 logits”和“评估概率”，它只会调用 `predict()`。因此你需要自己保证：
 
 - 评估指标和 `predict()` 输出语义匹配。
-- 如果模型需要特殊评估逻辑，可以覆写 `predict_step()` 或整个 `evaluate_epoch()`。
+- 特殊来源由 BatchResolver 子类读取 Prediction.extra/Interaction；BaseEvaluator 只接收最终 Tensor，预测仍由模型负责。
+
+内置 MSR/unified 的 `logits(interaction)` 用于训练，基类 `predict()` 返回 sigmoid 概率 Tensor。
+其他模型的 `predict()` 返回 Tensor 或 Prediction。Trainer 在实际模型预测后统一包装裸 Tensor，默认
+目标取该模型的 LABEL，覆盖 EMA teacher。Manager 自动绑定 schema，注册 target 与
+Prediction.target 确定同名标签及预测、自动查询监督 mask；多个未指定目标的标签会报错。
+所有 evaluator 统一收集 EvalBatch，特殊评估继承 BaseEvaluator 实现，不新增模型 eval step。
 
 ## 哪些东西不要误以为是“框架约定”
 

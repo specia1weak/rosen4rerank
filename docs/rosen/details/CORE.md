@@ -357,5 +357,5 @@ optimizer.step()
 ## 10. 实战注意事项
 
 - `BaseTrainer` 不是 `TrainingTracker` 的封装层，两个系统彼此独立。
-- 如果你想在验证时输出 `logloss`，不要让 `predict()` 返回未 sigmoid 的 logits，除非你自己接受这个误差。
+- 内置 MSR/unified 的 `logits()` 提供原始分，`predict()` 提供概率；LogLoss 使用概率，外部调用 predict 后不要重复 sigmoid。
 - 默认 `train_epoch()` 会对 batch 做 `batch.to(cfg.device)`，所以 `Interaction` 必须是可搬运 tensor 容器。

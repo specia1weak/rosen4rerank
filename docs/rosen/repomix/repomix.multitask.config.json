@@ -1,0 +1,47 @@
+{
+  "output": {
+    "filePath": "docs/rosen/repomix/kr1k-multitask.md",
+    "style": "markdown",
+    "parsableStyle": true,
+    "headerText": "新示例一：KR1K Pointwise CTR + 长播双标签多任务。实际运行源码完整保留；共享模块也含后续重排阶段。 先读 docs/rosen/repomix/examples/kr1k-multitask.md。附件为阅读包，运行请使用仓库源文件路径。",
+    "fileSummary": true,
+    "directoryStructure": true,
+    "removeComments": false,
+    "removeEmptyLines": false,
+    "compress": false,
+    "git": {
+      "sortByChanges": false
+    }
+  },
+  "include": [
+    "docs/rosen/repomix/examples/kr1k-multitask.md",
+    "docs/rosen/repomix/repomix.multitask.config.json",
+    "docs/rosen/repomix/README.md",
+    "workspace/kr_time_budget/run_architecture_examples.py",
+    "workspace/kr_time_budget/pipeline/architecture_examples.py",
+    "workspace/kr_time_budget/pipeline/prepare_architecture_examples.py",
+    "workspace/kr_time_budget/pipeline/run_architecture_examples.py",
+    "workspace/kr_time_budget/tests/test_architecture_examples.py",
+    "workspace/kr_time_budget/回复/新架构示例/用法.md",
+    "workspace/kr_time_budget/回复/新架构示例/实验报告.md",
+    "src/rosen/datasets/kuairand.py",
+    "workspace/kr_time_budget/回复/新架构示例/Prediction迁移.md",
+    "workspace/kr_time_budget/回复/新架构示例/verify_prediction_contract.py"
+  ],
+  "ignore": {
+    "useGitignore": false,
+    "useDotIgnore": false,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "**/__pycache__/**",
+      "**/*.pyc",
+      "**/.DS_Store",
+      "docs/rosen/repomix/rosen-core.md",
+      "docs/rosen/repomix/kr1k-*.md",
+      "docs/rosen/repomix/manifest.json"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}

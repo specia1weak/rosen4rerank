@@ -71,9 +71,9 @@ class AutoMTLModel(MSRModel):
                     f"AutoMTLModel does not support sequence field '{setting.field_name}' yet."
                 )
             self.feature_settings.append(setting)
-            if setting.emb_type in (EmbType.DENSE, EmbType.VECTOR_DENSE):
+            if setting.emb_type in (EmbType.DENSE, EmbType.LOG1P_DENSE, EmbType.VECTOR_DENSE):
                 self.dense_field_names.append(setting.field_name)
-                self.dense_input_dim += 1 if setting.emb_type == EmbType.DENSE else int(setting.embedding_dim)
+                self.dense_input_dim += int(setting.embedding_dim)
             else:
                 self.sparse_field_names.append(setting.field_name)
                 if self.embedding_dim is None:

@@ -24,12 +24,14 @@ class SomeModel(MSRModel):
         self.input_dim = self.input_view.embedding_dim
         ...
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         ...
 
     def calculate_loss(self, interaction):
         ...
 ```
+
+子类只实现原始分 `logits()`；继承的 `MSRModel.predict()` 负责 sigmoid 并返回概率 Tensor，Trainer 统一包装 Prediction。训练损失调用 logits，避免重复 sigmoid。
 
 最值得直接参考的现有实现：
 
@@ -83,14 +85,14 @@ class MyModel(MSRModel):
         domain_ids = interaction[self.DOMAIN].long()
         return x, domain_ids
 
-    def predict(self, interaction):
+    def logits(self, interaction):
         x, domain_ids = self.encode_features(interaction)
         h = self.encoder(x)
         return self.head(h, domain_ids)
 
     def calculate_loss(self, interaction):
         labels = interaction[self.LABEL].float()
-        logits = self.predict(interaction)
+        logits = self.logits(interaction)
         return F.binary_cross_entropy_with_logits(logits, labels)
 ```
 

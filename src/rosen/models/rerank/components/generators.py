@@ -27,12 +27,15 @@ class ContextEncoder(nn.Module):
         self.output_dim = 3 * emb_dim + 1 + width
 
     def forward(self, cate, history, dense, page_mask, oam, intra_poi, target_attention):
-        page, per_poi = oam(cate)
         hist_pages, _ = oam(history)
+        return self.encode_slate(cate, dense, hist_pages, page_mask, oam, intra_poi, target_attention)
+
+    def encode_slate(self, cate, dense, hist_pages, page_mask, oam, intra_poi, target_attention):
+        page, per_poi = oam(cate)
         interest = target_attention(page, hist_pages, page_mask)
         k = cate.shape[-3]
-        return torch.cat((page[:, None].expand(-1, k, -1),
-                          interest[:, None].expand(-1, k, -1), intra_poi(per_poi),
+        return torch.cat((page.unsqueeze(-2).expand(*page.shape[:-1], k, -1),
+                          interest.unsqueeze(-2).expand(*interest.shape[:-1], k, -1), intra_poi(per_poi),
                           dense, self.mlp_a(cate.flatten(-2))), dim=-1)
 
 
@@ -59,10 +62,10 @@ class ListwiseGenerator(nn.Module):
         nn.init.xavier_uniform_(self.output.weight)
         nn.init.zeros_(self.output.bias)
 
-    def forward(self, cate, history, dense, page_mask, oam, intra_poi, target_attention):
-        features = self.encoder(cate, history, dense, page_mask, oam, intra_poi, target_attention)
+    def forward(self, cate, history_pages, dense, page_mask, oam, intra_poi, target_attention):
+        features = self.encoder.encode_slate(cate, dense, history_pages, page_mask, oam, intra_poi, target_attention)
         logits = self.output(self.mlp_b(features)).squeeze(-1)
-        return logits, logits.argsort(dim=-1, descending=True, stable=True)[:, None]
+        return logits, logits.argsort(dim=-1, descending=True, stable=True).unsqueeze(-2)
 
 
 class PointerHead(nn.Module):
@@ -176,6 +179,6 @@ def lc_soft_score(probabilities, reference_permutations, tau=1.0):
     reference = (ref_positions[..., None, :] > ref_positions[..., :, None]).to(probabilities.dtype).detach()
     diagonal = ~torch.eye(k, dtype=torch.bool, device=probabilities.device)
     soft_pairs = ((soft[:, None] - reference).square() * diagonal).sum((-1, -2, -3))
-    pairs = torch.triu_indices(reference.shape[1], reference.shape[1], 1, device=reference.device)
-    fixed_pairs = (reference[:, pairs[0]] - reference[:, pairs[1]]).square().sum((-1, -2, -3))
-    return soft_pairs + fixed_pairs
+    # Reference-reference pairs are constant w.r.t. the learned order.
+    # Only the soft-to-reference term belongs in the optimization objective.
+    return soft_pairs

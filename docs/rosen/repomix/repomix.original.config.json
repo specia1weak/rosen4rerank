@@ -1,0 +1,39 @@
+{
+  "output": {
+    "filePath": "docs/rosen/repomix/kr1k-original.md",
+    "style": "markdown",
+    "parsableStyle": true,
+    "headerText": "原始 KR1K 示例：docs/rosen/details/kuairand1k.py 原文保留；历史验证输入等语义见包内导读。 先读 docs/rosen/repomix/examples/kr1k-original.md。附件为阅读包，运行请使用仓库源文件路径。",
+    "fileSummary": true,
+    "directoryStructure": true,
+    "removeComments": false,
+    "removeEmptyLines": false,
+    "compress": false,
+    "git": {
+      "sortByChanges": false
+    }
+  },
+  "include": [
+    "docs/rosen/repomix/examples/kr1k-original.md",
+    "docs/rosen/repomix/repomix.original.config.json",
+    "docs/rosen/repomix/README.md",
+    "docs/rosen/details/kuairand1k.py",
+    "src/rosen/datasets/kuairand.py"
+  ],
+  "ignore": {
+    "useGitignore": false,
+    "useDotIgnore": false,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "**/__pycache__/**",
+      "**/*.pyc",
+      "**/.DS_Store",
+      "docs/rosen/repomix/rosen-core.md",
+      "docs/rosen/repomix/kr1k-*.md",
+      "docs/rosen/repomix/manifest.json"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}

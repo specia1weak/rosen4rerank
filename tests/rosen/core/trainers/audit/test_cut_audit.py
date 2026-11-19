@@ -8,7 +8,7 @@ import torch
 
 from rosen.core.train import TrainerComponents, TrainerDataLoaders
 from rosen.core.trainers.audit import CutAuditTrainer
-from rosen.evaluate.evaluator import Evaluator
+from rosen.evaluate.evaluator import PointwiseEvaluator
 from rosen.evaluate.manager import EvaluatorManager
 from rosen.models.base import BaseModel
 from tests.support.model_fixtures import DummyCls
@@ -43,7 +43,7 @@ def test_cut_audit_trainer_evaluate_epoch_runs_one_at_a_time_cut_audit():
     model = CutAuditToyModel()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
     evaluator = EvaluatorManager()
-    evaluator.register("overall", Evaluator("auc", "logloss"))
+    evaluator.register("overall", PointwiseEvaluator("auc", "logloss"))
     cfg = SimpleNamespace(device="cpu", train_log_interval=100, max_epochs=1, ckpt_dir="")
     trainer = CutAuditTrainer(
         model,

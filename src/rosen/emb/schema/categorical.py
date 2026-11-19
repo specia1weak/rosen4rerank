@@ -6,6 +6,14 @@ import torch
 from torch import nn
 
 from rosen.core.enum_type import FeatureSource
+from rosen.core.formatters import (
+    ColumnFormatter,
+    IntFormatter,
+    PaddedIntSequenceFormatter,
+    PaddedNestedSequenceFormatter,
+    PaddingSide,
+    TruncateMode,
+)
 
 from .base import EmbSetting, EmbType
 from .utils import NULL_FALLBACK, map_list_to_indices, mean_pooling
@@ -135,9 +143,7 @@ class SparseEmbSetting(BaseCategoricalSetting):
     def get_transform_expr(self) -> pl.Expr:
         return self.get_element_transform_expr(pl.col(self.field_name)).alias(self.field_name)
 
-    def get_formatters(self):
-        from rosen.data.padding import IntFormatter
-
+    def get_formatters(self) -> Dict[str, ColumnFormatter]:
         return {self.field_name: IntFormatter()}
 
     def to_dict(self) -> Dict[str, Any]:
@@ -246,9 +252,7 @@ class QuantileEmbSetting(EmbSetting):
     def get_transform_expr(self) -> pl.Expr:
         return self.get_element_transform_expr(pl.col(self.field_name)).alias(self.field_name)
 
-    def get_formatters(self):
-        from rosen.data.padding import IntFormatter
-
+    def get_formatters(self) -> Dict[str, ColumnFormatter]:
         return {self.field_name: IntFormatter()}
 
     def to_dict(self) -> Dict[str, Any]:
@@ -383,19 +387,22 @@ class MultiSparseSetting(BaseCategoricalSetting):
         )
         return map_list_to_indices(cleaned, self.vocab, self.oov_idx)
 
-    def get_formatters(self):
-        from rosen.data.padding import PaddedIntSequenceFormatter
+    def get_formatters(self) -> Dict[str, ColumnFormatter]:
+        return {self.field_name: PaddedIntSequenceFormatter(max_len=self.max_tag_len, truncate_mode="head")}
 
-        return {self.field_name: PaddedIntSequenceFormatter(max_len=self.max_tag_len)}
-
-    def get_sequence_formatters(self, max_len: int, padding_side: str):
-        from rosen.data.padding import PaddedNestedSequenceFormatter
-
+    def get_sequence_formatters(
+        self,
+        max_len: int,
+        padding_side: PaddingSide,
+        truncate_mode: TruncateMode = "tail",
+    ) -> Dict[str, ColumnFormatter]:
         return {
             self.field_name: PaddedNestedSequenceFormatter(
                 max_seq_len=max_len,
                 max_tag_len=self.max_tag_len,
                 padding_side=padding_side,
+                truncate_mode=truncate_mode,
+                tag_truncate_mode="head",
             )
         }
 

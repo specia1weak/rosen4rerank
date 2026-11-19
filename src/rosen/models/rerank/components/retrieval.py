@@ -3,7 +3,7 @@
 import torch
 from torch import nn
 
-from ..base import apply_permutation, build_full_permutations
+from ..base import select_by_order, build_full_permutations
 
 
 def _constant(value, shape, default):
@@ -39,7 +39,7 @@ class PPMLSimHashRetriever(nn.Module):
             raise ValueError("History page count does not match SimHash configuration.")
         # [B,K!,K,D] is enough: average attributes before gathering permutations.
         per_poi = slate.mean(-2)
-        candidates = apply_permutation(per_poi, self.full_permutations)
+        candidates = select_by_order(per_poi, self.full_permutations)
         perm_signature = (candidates * self.position_encoding).mean(-2)
         hist_signature = self.pool(history)
         page_hash = torch.sign(hist_signature * self.hash_vector)

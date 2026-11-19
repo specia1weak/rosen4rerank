@@ -71,7 +71,7 @@ def infer_widedeep_fields(
         field_name = setting.field_name
         if field_name not in all_fields:
             all_fields.append(field_name)
-        if setting.emb_type in {EmbType.DENSE, EmbType.VECTOR_DENSE}:
+        if setting.emb_type in {EmbType.DENSE, EmbType.LOG1P_DENSE, EmbType.VECTOR_DENSE}:
             inferred_wide.append(field_name)
         else:
             inferred_deep.append(field_name)

@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+import math
+from typing import Any, Dict, List, Literal, Optional
 
 import polars as pl
 import torch
@@ -9,8 +10,24 @@ from torch import nn
 
 from rosen.core.enum_type import FeatureSource
 
-if TYPE_CHECKING:
-    from rosen.data.padding import ColumnFormatter
+from rosen.core.formatters import (
+    ColumnFormatter,
+    DenseFormatter,
+    IntFormatter,
+    PaddedFloatSequenceFormatter,
+    PaddedIntSequenceFormatter,
+    PaddingSide,
+    TruncateMode,
+)
+
+_AUX_SCALAR_FORMATTERS: Dict[str, type[ColumnFormatter]] = {
+    "float32": DenseFormatter,
+    "int64": IntFormatter,
+}
+_AUX_SEQ_FORMATTERS: Dict[str, type[ColumnFormatter]] = {
+    "float32": PaddedFloatSequenceFormatter,
+    "int64": PaddedIntSequenceFormatter,
+}
 
 
 class EmbType(Enum):
@@ -21,9 +38,50 @@ class EmbType(Enum):
     SPARSE_SEQ = "sparse_seq"
     SPARSE_SET = "sparse_set"
     DENSE = "dense"
+    LOG1P_DENSE = "log1p_dense"
     VECTOR_DENSE = "vector_dense"
     DENSE_SEQ = "dense_seq"
     SEQUENCE = "sequence"
+
+
+@dataclass(frozen=True)
+class AuxField:
+    """Typed model input carried by the schema, without fitting or embedding."""
+    field_name: str
+    max_len: Optional[int] = None
+    dtype: Literal["float32", "int64"] = "float32"
+    padding_side: Literal["left", "right"] = "right"
+    pad_val: float | int = 0.0
+
+    def __post_init__(self):
+        if not isinstance(self.field_name, str) or not self.field_name.strip():
+            raise ValueError("AuxField.field_name must be a non-empty string")
+        if self.max_len is not None and (isinstance(self.max_len, bool)
+                or not isinstance(self.max_len, int) or self.max_len <= 0):
+            raise ValueError("AuxField.max_len must be None or a positive integer")
+        if self.dtype not in ("float32", "int64"):
+            raise ValueError("AuxField.dtype must be float32 or int64")
+        if self.padding_side not in ("left", "right"):
+            raise ValueError("AuxField.padding_side must be left or right")
+        if not isinstance(self.pad_val, (int, float)) or not math.isfinite(self.pad_val):
+            raise ValueError("AuxField.pad_val must be finite")
+        if self.dtype == "int64" and (self.pad_val != int(self.pad_val)
+                or not -(2 ** 63) <= self.pad_val < 2 ** 63):
+            raise ValueError("Integer AuxField.pad_val must be representable as int64")
+
+    def get_formatters(self) -> Dict[str, ColumnFormatter]:
+        if self.max_len is None:
+            formatter_cls = _AUX_SCALAR_FORMATTERS.get(self.dtype)
+            if formatter_cls is None:
+                raise ValueError(f"Unsupported AuxField dtype: {self.dtype}")
+            return {self.field_name: formatter_cls()}
+        formatter_cls = _AUX_SEQ_FORMATTERS.get(self.dtype)
+        if formatter_cls is None:
+            raise ValueError(f"Unsupported AuxField dtype: {self.dtype}")
+        pad_val = int(self.pad_val) if self.dtype == "int64" else float(self.pad_val)
+        return {self.field_name: formatter_cls(
+            max_len=self.max_len, padding_side=self.padding_side, pad_val=pad_val,
+        )}
 
 
 @dataclass(frozen=True)
@@ -47,6 +105,18 @@ class SlateLabel:
             not isinstance(self.mask_field, str) or not self.mask_field.strip()
         ):
             raise ValueError("SlateLabel.mask_field must be None or a non-empty string.")
+
+    def get_formatters(self) -> Dict[str, ColumnFormatter]:
+        formatters: Dict[str, ColumnFormatter] = {
+            self.field_name: PaddedFloatSequenceFormatter(
+                max_len=self.max_len, padding_side=self.padding_side, pad_val=self.pad_val,
+            )
+        }
+        if self.mask_field:
+            formatters[self.mask_field] = PaddedFloatSequenceFormatter(
+                max_len=self.max_len, padding_side=self.padding_side, pad_val=0.0,
+            )
+        return formatters
 
 
 @dataclass
@@ -152,27 +222,25 @@ class EmbSetting(ABC):
         raise NotImplementedError(f"{self.__class__.__name__} does not support sequence element transform.")
 
     @abstractmethod
-    def get_formatters(self) -> Dict[str, "ColumnFormatter"]:
+    def get_formatters(self) -> Dict[str, ColumnFormatter]:
         pass
 
     def get_sequence_formatters(
         self,
         max_len: int,
-        padding_side: Literal["left", "right"],
-    ) -> Dict[str, "ColumnFormatter"]:
-        from rosen.data.padding import (
-            DenseFormatter,
-            IntFormatter,
-            PaddedFloatSequenceFormatter,
-            PaddedIntSequenceFormatter,
-        )
-
+        padding_side: PaddingSide,
+        truncate_mode: TruncateMode = "tail",
+    ) -> Dict[str, ColumnFormatter]:
         base_formatters = self.get_formatters()
         fmt = base_formatters[self.field_name]
         if isinstance(fmt, DenseFormatter):
-            return {self.field_name: PaddedFloatSequenceFormatter(max_len=max_len, padding_side=padding_side)}
+            return {self.field_name: PaddedFloatSequenceFormatter(
+                max_len=max_len, padding_side=padding_side, truncate_mode=truncate_mode,
+            )}
         if isinstance(fmt, IntFormatter):
-            return {self.field_name: PaddedIntSequenceFormatter(max_len=max_len, padding_side=padding_side)}
+            return {self.field_name: PaddedIntSequenceFormatter(
+                max_len=max_len, padding_side=padding_side, truncate_mode=truncate_mode,
+            )}
         raise NotImplementedError(
             f"Formatter {fmt.__class__.__name__} cannot be promoted to a sequence automatically."
         )

@@ -1,14 +1,27 @@
-"""Evaluators consume one resolved EvalBatch and never mutate its tensors."""
+"""Metrics consume resolved tensor views; source selection belongs to BatchResolver."""
 from abc import ABC, abstractmethod
-from dataclasses import replace
-from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 import torch
 
 from .batch import EvalBatch
 from .metrics import METRIC_REGISTRY
+
+
+def _metrics(values):
+    if len(values) == 1 and isinstance(values[0], (list, tuple)):
+        values = values[0]
+    return list(dict.fromkeys(value.lower() for value in values))
+
+
+def _cpu(tensor):
+    return tensor.detach().cpu() if tensor is not None else None
+
+
+def _valid(labels, mask):
+    if mask is not None and mask.shape != labels.shape:
+        raise ValueError("mask must have the same shape as labels")
+    return mask > 0 if mask is not None else torch.ones_like(labels, dtype=torch.bool)
 
 
 class BaseEvaluator(ABC):
@@ -25,97 +38,303 @@ class BaseEvaluator(ABC):
         raise NotImplementedError
 
 
-def _metrics(values):
-    if len(values) == 1 and isinstance(values[0], (list, tuple)):
-        values = values[0]
-    return list(dict.fromkeys(value.lower() for value in values))
-
-
-def _pointwise_inputs(batch):
-    users, targets, scores, mask = batch.users, batch.targets, batch.scores, batch.mask
-    if targets is None or scores is None:
-        raise ValueError("Point-wise evaluation requires targets and scores.")
-    if targets.ndim not in (1, 2) or scores.shape != targets.shape:
-        raise ValueError("Point-wise targets and scores must have matching [B] or [B, K] shapes.")
-    if mask is not None and mask.shape != targets.shape:
-        raise ValueError("mask must have the same shape as targets.")
-    valid = mask > 0 if mask is not None else torch.ones_like(targets, dtype=torch.bool)
-    if users is not None:
-        if targets.ndim == 2 and users.shape == targets.shape[:1]:
-            users = users[:, None].expand_as(targets)
-        if users.shape != targets.shape:
-            raise ValueError("User IDs must have shape [B] or match the target shape.")
-        users = users[valid]
-    return users, targets[valid], scores[valid]
-
-
-class PointWiseEvaluator(BaseEvaluator):
+class PointwiseEvaluator(BaseEvaluator):
+    """Global exposure classification and calibration, flattened over valid slots."""
     def __init__(self, *metrics):
         self.metrics = _metrics(metrics)
-        if set(self.metrics) - {"auc", "logloss", "gauc"}:
+        if set(self.metrics) - {"auc", "logloss", "gauc", "pcoc"}:
             raise ValueError(f"Unsupported point-wise metrics: {self.metrics}")
         self.clear()
 
     def collect(self, batch: EvalBatch):
-        users, targets, scores = _pointwise_inputs(batch)
-        if targets.numel() == 0:
+        labels, scores, users = _cpu(batch.labels), _cpu(batch.scores), _cpu(batch.users)
+        if scores is None or labels.ndim not in (1, 2) or scores.shape != labels.shape:
+            raise ValueError("Point-wise labels and scores require matching [B] or [B,N] shapes")
+        valid = _valid(labels, _cpu(batch.mask))
+        if "gauc" in self.metrics:
+            if users is None:
+                raise ValueError("gauc requires user IDs; provide uid_field on EvaluatorManager or register")
+            if valid.ndim == 2 and users.shape == valid.shape[:1]:
+                users = users[:, None].expand_as(valid)
+            if users.shape != valid.shape:
+                raise ValueError("User IDs must be [B] or match labels")
+        labels, scores = labels[valid].double(), scores[valid].double()
+        if not torch.isfinite(labels).all() or not torch.isfinite(scores).all():
+            raise ValueError("Valid labels and scores must be finite")
+        if set(self.metrics) - {"pcoc"} and not torch.isin(labels, labels.new_tensor([0, 1])).all():
+            raise ValueError("Classification metrics require binary labels")
+        if "logloss" in self.metrics and ((scores < 0) | (scores > 1)).any():
+            raise ValueError("logloss requires probabilities in [0,1]")
+        if not labels.numel():
             return
-        if "gauc" in self.metrics and users is None:
-            raise ValueError("gauc requires user IDs; provide uid_field on EvaluatorManager or register.")
-        if users is not None:
-            self.all_users.extend(users.detach().cpu().tolist())
-        self.all_targets.extend(targets.detach().cpu().tolist())
-        self.all_preds.extend(scores.detach().cpu().tolist())
+        if "gauc" in self.metrics:
+            self._user_batches.append(users[valid].numpy().copy())
+        self._label_batches.append(labels.numpy().copy())
+        self._score_batches.append(scores.numpy().copy())
 
     def summary(self):
-        if not self.all_targets:
+        if not self._label_batches:
             return {}
+        labels = np.concatenate(self._label_batches)
+        scores = np.concatenate(self._score_batches)
+        users = np.concatenate(self._user_batches) if self._user_batches else None
         return {metric: float(METRIC_REGISTRY[metric].calculate(
-            y_true=np.array(self.all_targets), y_pred=np.array(self.all_preds), users=self.all_users,
-        )) for metric in self.metrics}
+            y_true=labels, y_pred=scores, users=users))
+            for metric in self.metrics}
 
     def clear(self):
-        self.all_users, self.all_targets, self.all_preds = [], [], []
+        self._user_batches, self._label_batches, self._score_batches = [], [], []
 
 
-class TopKEvaluator(BaseEvaluator):
+class RankingEvaluator(BaseEvaluator):
+    """Candidate prediction and request-local ranking; explicit order takes precedence.
+
+    NDCG uses graded labels. Other cutoff metrics use label > 0 as relevance.
+    Recall/hit/MRR/MAP exclude requests without positives; NDCG and precision
+    include their zero results. Precision divides by valid selected positions.
+    Tied scores keep input order.
+    """
+    _POINTWISE_METRICS = {"auc", "logloss", "gauc", "pcoc"}
+    _CUTOFF_METRIC_MAP = {"ndcg": "list_ndcg", "recall": "list_recall", "hit": "list_hit",
+                          "hr": "list_hit", "precision": "list_precision", "mrr": "list_mrr", "map": "list_map"}
+
+    def __init__(self, *metrics: str):
+        self.metrics = _metrics(metrics)
+        point = [m for m in self.metrics if m in self._POINTWISE_METRICS]
+        self.cutoffs = {}
+        for metric in self.metrics:
+            if metric in point or metric in ("list_auc", "in_slate_auc"):
+                continue
+            name, separator, k = metric.partition("@")
+            if name not in self._CUTOFF_METRIC_MAP or not separator or not k.isdigit() or int(k) <= 0:
+                raise ValueError(f"Unsupported slot/ranking metric: {metric}")
+            self.cutoffs[metric] = (self._CUTOFF_METRIC_MAP[name], int(k))
+        self.point_evaluator = PointwiseEvaluator(*point)
+        self.clear()
+
+    def collect(self, batch: EvalBatch):
+        labels = _cpu(batch.labels).double()
+        scores = _cpu(batch.scores).double() if batch.scores is not None else None
+        if labels.ndim != 2 or not labels.shape[1]:
+            raise ValueError("RankingEvaluator requires matching candidate labels [B,N]")
+        valid = _valid(labels, _cpu(batch.mask))
+        if not torch.isfinite(labels[valid]).all():
+            raise ValueError("Valid ranking labels must be finite")
+        needs_scores = bool(self.point_evaluator.metrics) or any(m in self.metrics for m in ("list_auc", "in_slate_auc"))
+        if needs_scores and (scores is None or scores.shape != labels.shape):
+            raise ValueError("Score-based ranking metrics require aligned scores [B,N]")
+        if scores is not None and scores.shape == labels.shape and not torch.isfinite(scores[valid]).all():
+            raise ValueError("Valid ranking scores must be finite")
+        if self.point_evaluator.metrics:
+            self.point_evaluator.collect(batch)
+        for metric in ("list_auc", "in_slate_auc"):
+            if metric in self.metrics:
+                values = METRIC_REGISTRY[metric].calculate(labels, scores, valid)
+                legal = torch.isfinite(values)
+                self.sums[metric] += values[legal].sum().item()
+                self.counts[metric] += int(legal.sum())
+        if self.cutoffs:
+            if (labels[valid] < 0).any():
+                raise ValueError("ranking/ndcg requires nonnegative relevance")
+            indices = _cpu(batch.order)
+            if indices is None:
+                if scores is None or scores.shape != labels.shape:
+                    raise ValueError("Ranking requires scores [B,N] or order [B,K]")
+                indices = scores.masked_fill(~valid, -torch.inf).argsort(dim=-1, descending=True, stable=True)
+            rows = valid.any(-1)
+            for metric, (registry_key, cutoff) in self.cutoffs.items():
+                values = METRIC_REGISTRY[registry_key].calculate(labels, indices, valid, k=cutoff)
+                legal = rows & torch.isfinite(values)
+                self.sums[metric] += values[legal].sum().item()
+                self.counts[metric] += int(legal.sum())
+        self.row_count += int(valid.any(-1).sum())
+
+    def summary(self):
+        if not self.row_count:
+            return {}
+        result = self.point_evaluator.summary() if self.point_evaluator.metrics else {}
+        result.update({m: self.sums[m] / n if n else float("nan") for m, n in self.counts.items()})
+        return {m: result[m] for m in self.metrics if m in result}
+
+    def clear(self):
+        self.point_evaluator.clear()
+        self.row_count = 0
+        self.sums = {m: 0. for m in self.metrics if m not in self._POINTWISE_METRICS}
+        self.counts = dict.fromkeys(self.sums, 0)
+
+
+class SlateValueEvaluator(BaseEvaluator):
+    """Cross-request value metrics on already aligned whole-slate tensors."""
+    def __init__(self, *metrics: str, reduction: str = "sum", ncis_cap: float = 10.,
+                 candidate_reduce: str = "none"):
+        self.metrics = _metrics(metrics)
+        if set(self.metrics) - {"r_auc", "slate_auc", "pcoc", "rmse", "mae", "ncis", "cand_mean", "cand_max"}:
+            raise ValueError(f"Unsupported slate metrics: {self.metrics}")
+        if reduction not in ("sum", "mean", "dcg"):
+            raise ValueError("reduction must be sum, mean or dcg")
+        if not np.isfinite(ncis_cap) or ncis_cap <= 0:
+            raise ValueError("ncis_cap must be finite and positive")
+        if candidate_reduce not in ("none", "mean", "max"):
+            raise ValueError("candidate_reduce must be none, mean or max")
+        self.candidate_reduce = candidate_reduce
+        self.reduction, self.ncis_cap = reduction, ncis_cap
+        self.clear()
+
+    def reduce_slate(self, tensor, mask):
+        """Reduce slots in [B,K] / [B,M,K]; request scalars [B] pass through."""
+        if tensor.ndim == 1:
+            return tensor
+        if tensor.ndim not in (2, 3) or not tensor.shape[-1]:
+            raise ValueError("reduce_slate expects [B], [B,K] or [B,M,K]")
+        if mask is not None and tensor.ndim == 3 and mask.shape == (tensor.shape[0], tensor.shape[-1]):
+            mask = mask[:, None].expand_as(tensor)
+        valid = _valid(tensor, mask)
+        values = torch.where(valid, tensor.double(), 0.)
+        if self.reduction == "dcg":
+            discount = 1. / torch.log2(torch.arange(tensor.shape[-1], device=tensor.device).double() + 2)
+            return (values * discount).sum(-1)
+        total = values.sum(-1)
+        return total / valid.sum(-1).clamp_min(1) if self.reduction == "mean" else total
+
+    def _collect_candidates(self, batch):
+        scores, mask = _cpu(batch.scores).double(), _cpu(batch.mask)
+        if not scores.shape[1] or not scores.shape[2]:
+            raise ValueError("Candidate tensors must be non-empty [B,M,K]")
+        if mask is not None and mask.shape == (scores.shape[0], scores.shape[-1]):
+            mask = mask[:, None].expand_as(scores)
+        valid = _valid(scores, mask)
+        candidates = valid.any(-1)
+        rows = candidates.any(-1)
+        if not torch.isfinite(scores[valid]).all():
+            raise ValueError("Valid slate values must be finite")
+        predictions = self.reduce_slate(scores, valid)
+        value_metrics = [m for m in self.metrics if m not in ("cand_mean", "cand_max")]
+        reduced = []
+        if value_metrics:
+            if self.candidate_reduce == "none":
+                raise ValueError("Candidate value metrics require aligned reduction: candidate_reduce='mean' or 'max'")
+            selected = predictions.masked_fill(~candidates, -torch.inf).argmax(-1)
+            for tensor in [scores, _cpu(batch.labels)] + ([_cpu(batch.ref_scores)] if "ncis" in self.metrics else []):
+                tensor = tensor.double()
+                if tensor.ndim == 1:
+                    values = tensor
+                else:
+                    if tensor.ndim == 2 and tensor.shape == (scores.shape[0], scores.shape[-1]):
+                        tensor = tensor[:, None].expand_as(scores)
+                    if tensor.shape != scores.shape:
+                        raise ValueError("Candidate labels and references must be [B], [B,K] or aligned [B,M,K]")
+                    if not torch.isfinite(tensor[valid]).all():
+                        raise ValueError("Valid slate values must be finite")
+                    per_candidate = self.reduce_slate(tensor, valid)
+                    if self.candidate_reduce == "max":
+                        # The predicted best candidate drives all three sources.
+                        values = per_candidate.gather(1, selected[:, None])[:, 0]
+                    else:
+                        values = per_candidate.masked_fill(~candidates, 0).sum(-1) / candidates.sum(-1).clamp_min(1)
+                reduced.append(values[rows])
+            self._store_values(reduced)
+        if "cand_mean" in self.metrics:
+            self.cand_total += predictions[candidates].sum().item()
+            self.cand_count += int(candidates.sum())
+        if "cand_max" in self.metrics:
+            self.cand_max += predictions.masked_fill(~candidates, -torch.inf).amax(-1)[rows].sum().item()
+        self.cand_rows += int(rows.sum())
+
+    def _store_values(self, values):
+        if any(not torch.isfinite(value).all() for value in values):
+            raise ValueError("Valid slate values must be finite")
+        if "ncis" in self.metrics and ((values[0] < 0).any() or (values[2] < 0).any()):
+            raise ValueError("ncis requires nonnegative prediction and reference scores")
+        if not values[0].numel():
+            return
+        self._prediction_batches.append(values[0].numpy().copy())
+        self._value_batches.append(values[1].numpy().copy())
+        if "ncis" in self.metrics:
+            self._reference_batches.append(values[2].numpy().copy())
+
+    def collect(self, batch: EvalBatch):
+        if batch.scores is None or ("ncis" in self.metrics and batch.ref_scores is None):
+            raise ValueError("SlateValueEvaluator requires scores and ncis requires ref_scores")
+        if batch.scores.ndim == 3:
+            self._collect_candidates(batch)
+            return
+        if any(m in self.metrics for m in ("cand_mean", "cand_max")):
+            raise ValueError("cand_mean/cand_max require [B,M,K] scores")
+        mask = _cpu(batch.mask)
+        if mask is not None and (mask.ndim != 2 or mask.shape[0] != batch.batch_size):
+            raise ValueError("SlateValueEvaluator mask must be [B,K]")
+        rows = mask.gt(0).any(-1) if mask is not None else torch.ones(batch.batch_size, dtype=torch.bool)
+        tensors = [batch.scores, batch.labels] + ([batch.ref_scores] if "ncis" in self.metrics else [])
+        if len({tensor.shape for tensor in tensors if tensor.ndim == 2}) > 1:
+            raise ValueError("SlateValueEvaluator slot tensors must align")
+        values = []
+        for tensor in tensors:
+            if tensor.ndim not in (1, 2):
+                raise ValueError("SlateValueEvaluator requires [B] or aligned [B,K] tensors")
+            values.append(self.reduce_slate(_cpu(tensor).double(), mask)[rows])
+        self._store_values(values)
+
+    def summary(self):
+        result = {}
+        if self._value_batches:
+            values = np.concatenate(self._value_batches)
+            predictions = np.concatenate(self._prediction_batches)
+            references = np.concatenate(self._reference_batches) if self._reference_batches else None
+            result = {m: float(METRIC_REGISTRY[m].calculate(y_true=values, y_pred=predictions,
+                        y_ref=references, cap=self.ncis_cap)) for m in self.metrics
+                      if m not in ("cand_mean", "cand_max")}
+        if "cand_mean" in self.metrics and self.cand_count:
+            result["cand_mean"] = self.cand_total / self.cand_count
+        if "cand_max" in self.metrics and self.cand_rows:
+            result["cand_max"] = self.cand_max / self.cand_rows
+        return result
+
+    def clear(self):
+        self._prediction_batches, self._value_batches, self._reference_batches = [], [], []
+        self.cand_total = self.cand_max = 0.
+        self.cand_count = self.cand_rows = 0
+
+
+class RetrievalEvaluator(BaseEvaluator):
     """Leave-one-out full-catalog metrics; labels are catalog item indices."""
     def __init__(self, *metrics, history_dict=None):
         self.metrics = _metrics(metrics)
         for metric in self.metrics:
             name, separator, cutoff = metric.partition("@")
-            if name not in ("hr", "ndcg") or not separator or not cutoff.isdigit() or int(cutoff) <= 0:
+            if name not in ("hr", "ndcg", "recall", "mrr") or not separator or not cutoff.isdigit() or int(cutoff) <= 0:
                 raise ValueError(f"Unsupported full-catalog metric: {metric}")
         self.history_dict = history_dict if history_dict is not None else {}
         self.clear()
 
     def collect(self, batch: EvalBatch):
-        scores, targets, users = batch.pred.full_scores, batch.targets, batch.users
-        if scores is None or targets is None or users is None:
-            raise ValueError("TopKEvaluator requires full_scores, catalog targets and user IDs.")
+        scores, labels, users = batch.full_scores, batch.labels, batch.users
+        if scores is None or labels is None or users is None:
+            raise ValueError("RetrievalEvaluator requires full_scores, catalog labels and user IDs.")
         if batch.mask is not None:
-            raise ValueError("Full-catalog TopKEvaluator does not accept slot masks; use SlateEvaluator.")
-        if targets.shape != scores.shape[:1] or targets.dtype != torch.long or users.shape != targets.shape:
-            raise ValueError("Catalog targets must be LongTensor[B], with user IDs [B].")
-        if scores.shape[1] == 0 or ((targets < 0) | (targets >= scores.shape[1])).any():
+            raise ValueError("Full-catalog RetrievalEvaluator does not accept slot masks; use RankingEvaluator.")
+        if scores.ndim != 2:
+            raise ValueError("RetrievalEvaluator full_scores must be [B,|I|]")
+        if labels.shape != scores.shape[:1] or labels.dtype != torch.long or users.shape != labels.shape:
+            raise ValueError("Catalog labels must be LongTensor[B], with user IDs [B].")
+        if scores.shape[1] == 0 or ((labels < 0) | (labels >= scores.shape[1])).any():
             raise ValueError("Catalog target index is outside full_scores.")
-        if not targets.numel():
+        if not labels.numel():
             return
         local = scores.detach().clone()
         row_ids = torch.arange(scores.shape[0], device=scores.device)
-        positives = local[row_ids, targets].clone()
+        positives = local[row_ids, labels].clone()
         for row, uid in enumerate(users.tolist()):
             history = self.history_dict.get(uid, [])
             if history:
                 local[row, history] = -torch.inf
-        local[row_ids, targets] = positives
+        local[row_ids, labels] = positives
         max_k = min(max((int(m.split('@')[1]) for m in self.metrics), default=0), scores.shape[1])
         indices = local.topk(max_k, dim=-1).indices
-        hits = (indices == targets[:, None]).float()
+        hits = (indices == labels[:, None]).float()
         for metric in self.metrics:
             name, cutoff = metric.split("@")
             k = min(int(cutoff), scores.shape[1])
-            self.sums[metric] += METRIC_REGISTRY[name].calculate(hits_k=hits[:, :k], k=k)
+            self.sums[metric] += METRIC_REGISTRY[{"recall": "catalog_recall", "mrr": "catalog_mrr"}.get(name, name)].calculate(hits_k=hits[:, :k], k=k)
         self.count += scores.shape[0]
 
     def summary(self):
@@ -124,162 +343,3 @@ class TopKEvaluator(BaseEvaluator):
     def clear(self):
         self.sums = dict.fromkeys(self.metrics, 0.0)
         self.count = 0
-
-
-class Evaluator(BaseEvaluator):
-    """Compatibility facade: retain mixed point-wise / full-catalog registration."""
-    def __init__(self, *metrics, history_dict=None):
-        self.metrics = _metrics(metrics)
-        point = [metric for metric in self.metrics if "@" not in metric]
-        topk = [metric for metric in self.metrics if "@" in metric]
-        if topk and history_dict is None:
-            raise ValueError("Full-catalog metrics require history_dict (an empty dict is allowed).")
-        self.point_evaluator = PointWiseEvaluator(*point) if point else None
-        self.topk_evaluator = TopKEvaluator(*topk, history_dict=history_dict) if topk else None
-
-    def collect(self, batch: EvalBatch):
-        if self.point_evaluator is not None:
-            self.point_evaluator.collect(batch)
-        if self.topk_evaluator is not None:
-            self.topk_evaluator.collect(batch)
-
-    def summary(self):
-        result = {}
-        for evaluator in (self.point_evaluator, self.topk_evaluator):
-            if evaluator is not None:
-                result.update(evaluator.summary())
-        return result
-
-    def clear(self):
-        for evaluator in (self.point_evaluator, self.topk_evaluator):
-            if evaluator is not None:
-                evaluator.clear()
-
-
-class SlateEvaluator(BaseEvaluator):
-    """Supervised input-slate score metrics, accumulated across all batches."""
-    def __init__(self, *metrics, ndcg_gain_source="label"):
-        self.metrics = _metrics(metrics)
-        if ndcg_gain_source not in ("label", "position"):
-            raise ValueError("ndcg_gain_source must be 'label' or 'position'.")
-        self.ndcg_gain_source = ndcg_gain_source
-        for metric in self.metrics:
-            if metric in ("auc", "logloss", "gauc", "cb"):
-                continue
-            name, separator, cutoff = metric.partition("@")
-            if name != "ndcg" or not separator or not cutoff.isdigit() or int(cutoff) <= 0:
-                raise ValueError(f"Unsupported slate metric: {metric}; candidate metrics belong in custom evaluators.")
-        self.point_evaluator = PointWiseEvaluator(*(m for m in self.metrics if m in ("auc", "logloss", "gauc")))
-        self.clear()
-
-    def collect(self, batch: EvalBatch):
-        labels, scores = batch.targets, batch.scores
-        if labels is None or scores is None or labels.ndim != 2 or scores.shape != labels.shape:
-            raise ValueError("SlateEvaluator requires matching [B, K] targets and scores.")
-        if batch.mask is not None and batch.mask.shape != labels.shape:
-            raise ValueError("mask must have the same shape as slate targets.")
-        if self.point_evaluator.metrics:
-            self.point_evaluator.collect(batch)
-        labels, scores = labels.detach().cpu().double(), scores.detach().cpu().double()
-        valid = batch.mask.detach().cpu() > 0 if batch.mask is not None else torch.ones_like(labels, dtype=torch.bool)
-        self.label_sum += labels[valid].sum().item()
-        self.pred_sum += scores[valid].sum().item()
-        self.slot_count += int(valid.sum())
-        relevance = labels if self.ndcg_gain_source == "label" else torch.arange(
-            labels.shape[1] - 1, -1, -1, dtype=labels.dtype,
-        ).expand_as(labels)
-        rows = valid.any(-1)
-        for metric in self.sums:
-            values = METRIC_REGISTRY["list_ndcg"].calculate(relevance, scores, int(metric.split('@')[1]), mask=valid)
-            self.sums[metric] += values[rows].sum().item()
-            self.counts[metric] += int(rows.sum())
-
-    def summary(self):
-        result = self.point_evaluator.summary() if self.point_evaluator.metrics else {}
-        if "cb" in self.metrics and self.slot_count:
-            result["cb"] = self.pred_sum / self.label_sum if self.label_sum else 0.0
-        result.update({metric: value / self.counts[metric] for metric, value in self.sums.items() if self.counts[metric]})
-        return result
-
-    def clear(self):
-        self.point_evaluator.clear()
-        self.sums = {metric: 0.0 for metric in self.metrics if metric.startswith("ndcg@")}
-        self.counts = dict.fromkeys(self.sums, 0)
-        self.label_sum = self.pred_sum = 0.0
-        self.slot_count = 0
-
-
-class OrderEvaluator(BaseEvaluator):
-    """Evaluate the final permutation, using original-slot labels and masks."""
-    def __init__(self, *metrics):
-        self.metrics = _metrics(metrics)
-        if any(not metric.startswith("ndcg@") for metric in self.metrics):
-            raise ValueError("OrderEvaluator supports ndcg@k metrics.")
-        self.evaluator = SlateEvaluator(*self.metrics)
-
-    def collect(self, batch: EvalBatch):
-        order, labels = batch.order, batch.targets
-        if order is None or labels is None or labels.ndim != 2 or order.shape != labels.shape:
-            raise ValueError("OrderEvaluator requires matching [B, K] order and targets.")
-        expected = torch.arange(order.shape[1], device=order.device).expand_as(order)
-        if order.dtype != torch.long or not torch.equal(order.sort(-1).values, expected):
-            raise ValueError("order must be a permutation of input slot indices 0..K-1.")
-        ranks = torch.arange(order.shape[1], 0, -1, device=order.device, dtype=torch.float32).expand_as(order)
-        scores = torch.zeros_like(ranks).scatter(1, order, ranks)
-        self.evaluator.collect(replace(batch, scores=scores))
-
-    def summary(self):
-        return self.evaluator.summary()
-
-    def clear(self):
-        self.evaluator.clear()
-
-
-class LegacyEvaluatorAdapter(BaseEvaluator):
-    """Explicit bridge for an old collect(users, targets, preds, full_scores) object.
-
-    Slot masks need a real migration rather than silently changing old semantics.
-    """
-    def __init__(self, evaluator):
-        self.evaluator = evaluator
-
-    def collect(self, batch: EvalBatch):
-        if batch.mask is not None:
-            raise ValueError("LegacyEvaluatorAdapter does not support slot masks; migrate collect(EvalBatch).")
-        self.evaluator.collect(batch.users, batch.targets, batch.scores, batch.pred.full_scores)
-
-    def summary(self):
-        return self.evaluator.summary()
-
-    def clear(self):
-        self.evaluator.clear()
-
-
-class EvaluatorDecorator(BaseEvaluator):
-    def __init__(self, evaluator):
-        self.evaluator = evaluator
-
-    def collect(self, batch: EvalBatch):
-        self.evaluator.collect(batch)
-
-    def summary(self):
-        return self.evaluator.summary()
-
-    def clear(self):
-        self.evaluator.clear()
-
-
-class LogDecorator(EvaluatorDecorator):
-    """Optional standalone metric log; epoch/step logging belongs to the manager."""
-    def __init__(self, evaluator, save_path=None, title=None):
-        super().__init__(evaluator)
-        self.save_path, self.title = Path(save_path) if save_path else None, title
-        if self.save_path:
-            self.save_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def summary(self):
-        result = self.evaluator.summary()
-        if self.save_path:
-            with self.save_path.open("a", encoding="utf-8") as stream:
-                stream.write(f"[{datetime.now().isoformat(timespec='seconds')}] {self.title or ''} {result}\n")
-        return result

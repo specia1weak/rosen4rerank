@@ -5,6 +5,7 @@ import torch
 from torch import nn
 
 from rosen.core.enum_type import FeatureSource
+from rosen.core.formatters import ColumnFormatter, DenseFormatter, VectorDenseFormatter
 
 from .base import EmbSetting, EmbType
 
@@ -34,9 +35,7 @@ class BaseNumericalSetting(EmbSetting):
     def requires_embedding_module(self) -> bool:
         return False
 
-    def get_formatters(self):
-        from rosen.data.padding import DenseFormatter
-
+    def get_formatters(self) -> Dict[str, ColumnFormatter]:
         return {self.field_name: DenseFormatter()}
 
 
@@ -103,6 +102,41 @@ class MinMaxDenseSetting(BaseNumericalSetting):
             max_val=data.get("max_val"),
         )
         obj.is_fitted = data.get("is_fitted", False)
+        return obj
+
+    def compute_tensor(self, interaction: dict, emb_modules: nn.ModuleDict) -> torch.Tensor:
+        return interaction[self.field_name].unsqueeze(-1)
+
+
+class Log1PDenseSetting(BaseNumericalSetting):
+    """Stateless ln(1 + x); nulls become zero, domain errors retain NaN/-inf."""
+
+    emb_type = EmbType.LOG1P_DENSE
+
+    def __init__(self, field_name: str, source: FeatureSource):
+        super().__init__(field_name=field_name, source=source, embedding_dim=1)
+        self.is_fitted = True
+
+    def get_fit_exprs(self) -> List[pl.Expr]:
+        return []
+
+    def get_element_fit_exprs(self, seq_expr: pl.Expr, alias: str) -> List[pl.Expr]:
+        return []
+
+    def parse_fit_result(self, result_df: pl.DataFrame):
+        self.is_fitted = True
+
+    def get_element_transform_expr(self, expr: Optional[pl.Expr] = None) -> pl.Expr:
+        expr = expr if expr is not None else pl.element()
+        return expr.cast(pl.Float64, strict=False).log1p().fill_null(0.0).cast(pl.Float32)
+
+    def get_transform_expr(self) -> pl.Expr:
+        return self.get_element_transform_expr(pl.col(self.field_name)).alias(self.field_name)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Log1PDenseSetting":
+        obj = cls(field_name=data["field_name"], source=FeatureSource[data["feature_source"]])
+        obj.load_state(data)
         return obj
 
     def compute_tensor(self, interaction: dict, emb_modules: nn.ModuleDict) -> torch.Tensor:
@@ -188,9 +222,7 @@ class VectorDenseSetting(BaseNumericalSetting):
         # vector information instead of silently zeroing mismatched rows.
         return pl.col(self.field_name).cast(pl.List(pl.Float32)).alias(self.field_name)
 
-    def get_formatters(self):
-        from rosen.data.padding import VectorDenseFormatter
-
+    def get_formatters(self) -> Dict[str, ColumnFormatter]:
         return {
             self.field_name: VectorDenseFormatter(
                 dim=int(self.embedding_dim),

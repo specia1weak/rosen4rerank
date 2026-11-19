@@ -7,7 +7,7 @@ from sklearn.metrics import log_loss
 
 from rosen.core.train import TrainerComponents, TrainerDataLoaders
 from rosen.core.trainers import BaseTrainer
-from rosen.evaluate import Evaluator, EvaluatorManager
+from rosen.evaluate import PointwiseEvaluator, EvaluatorManager
 from rosen.models.msr import MSRModel
 from tests.support.msr_contract_cases import CASES, make_case
 
@@ -36,7 +36,7 @@ def test_msr_raw_logits_training_and_probability_prediction(name, monkeypatch):
 def test_native_msr_tensor_predict_works_with_trainer_and_logloss(name):
     model, inter = make_case(name)
     manager = EvaluatorManager()
-    manager.register('overall', Evaluator('auc', 'logloss'))
+    manager.register('overall', PointwiseEvaluator('auc', 'logloss'))
     trainer = BaseTrainer(model, torch.optim.SGD(model.parameters(), lr=0.), model.manager,
                           TrainerDataLoaders([], [inter]), TrainerComponents(evaluator_manager=manager),
                           SimpleNamespace(device='cpu'))

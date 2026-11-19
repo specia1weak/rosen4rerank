@@ -7,7 +7,7 @@ from sklearn.metrics import log_loss
 
 from rosen.core.train import TrainerComponents, TrainerDataLoaders
 from rosen.core.trainers import BaseTrainer
-from rosen.evaluate import Evaluator, EvaluatorManager
+from rosen.evaluate import PointwiseEvaluator, EvaluatorManager
 from rosen.models.msr.base import MSRModel
 from tests.support.unified_contract_cases import CASES, make_case
 
@@ -43,7 +43,7 @@ def test_unified_training_uses_logits_and_prediction_returns_probabilities(name,
 def test_unified_tensor_predictions_use_default_trainer_evaluation(name):
     model, inter = make_case(name)
     evaluators = EvaluatorManager()
-    evaluators.register('overall', Evaluator('auc', 'logloss'))
+    evaluators.register('overall', PointwiseEvaluator('auc', 'logloss'))
     trainer = BaseTrainer(model, torch.optim.SGD(model.parameters(), lr=0.), model.manager,
                           TrainerDataLoaders([], [inter]), TrainerComponents(evaluator_manager=evaluators),
                           SimpleNamespace(device='cpu'))

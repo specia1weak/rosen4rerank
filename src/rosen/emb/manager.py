@@ -10,8 +10,9 @@ from typing import Any, Iterable, List, Literal, Mapping, Optional, Union
 import polars as pl
 
 from rosen.emb.split import SplitConfig, SplitContext, create_split_strategy
-from rosen.emb.schema import EmbSetting, EmbType, MultiSparseSetting, SlateLabel, SparseEmbSetting
+from rosen.emb.schema import AuxField, EmbSetting, EmbType, MultiSparseSetting, SlateLabel, SparseEmbSetting
 from rosen.core.enum_type import FeatureSource
+from rosen.core.formatters import ColumnFormatter
 
 from rosen.utils.sort import sort_parquet_inplace
 from rosen.utils.shuffle import write_shuffled_parquet
@@ -59,7 +60,8 @@ class SchemaManager:
     def __init__(self, settings_list: List[EmbSetting], schema_dir: str,
                  time_field=None,
                  label_fields: Union[str, SlateLabel, Iterable[Union[str, SlateLabel]]]=None,
-                 domain_fields: Union[str, Iterable[str]]=None
+                 domain_fields: Union[str, Iterable[str]]=None,
+                 aux_fields: Union[AuxField, Iterable[AuxField]]=None
                  ):
         self.settings = settings_list
 
@@ -99,6 +101,24 @@ class SchemaManager:
                 raise ValueError(f"Shared mask '{spec.mask_field}' requires matching max_len and padding_side.")
             mask_layouts[spec.mask_field] = layout
         self._domain_fields = ensure_list(domain_fields)
+        self._aux_specs: dict[str, AuxField] = {}
+        occupied = {name for setting in self.settings for name in setting.get_output_field_names()}
+        occupied.update(name for name in (self.time_field, *self.label_fields, *self.mask_fields, *self.domain_fields) if name)
+        for aux in ensure_list(aux_fields):
+            if not isinstance(aux, AuxField):
+                raise TypeError("aux_fields must contain AuxField instances")
+            if aux.field_name in occupied:
+                raise ValueError(f"AuxField '{aux.field_name}' conflicts with an existing schema field")
+            if aux.field_name in self._aux_specs and self._aux_specs[aux.field_name] != aux:
+                raise ValueError(f"Conflicting AuxField declarations for '{aux.field_name}'")
+            self._aux_specs[aux.field_name] = aux
+
+    @property
+    def aux_fields(self) -> tuple[str, ...]:
+        return tuple(self._aux_specs)
+
+    def get_aux_spec(self, field_name: str) -> Optional[AuxField]:
+        return self._aux_specs.get(field_name)
 
     @property
     def label_field(self) -> Optional[str]:
@@ -670,17 +690,52 @@ class SchemaManager:
                 return setting
         return None
 
-    def fields(self):
-        fields = []
+    def fields(self, *, include_labels: bool = True) -> list[str]:
+        """Encoded output columns, deduplicated in schema declaration order."""
+        cols: list[str] = []
         for setting in self.settings:
-            for field_name in setting.get_output_field_names():
-                if field_name not in fields:
-                    fields.append(field_name)
+            cols.extend(setting.get_output_field_names())
+        cols.extend(name for name in (
+            self.time_field, *self.label_fields, *self.mask_fields,
+            *self.domain_fields, *self.aux_fields,
+        ) if name)
+        deduped = list(dict.fromkeys(cols))
+        if not include_labels:
+            label_set = set(self.label_fields)
+            deduped = [name for name in deduped if name not in label_set]
+        return deduped
 
-        for ctx_field in (self.time_field, *self.label_fields, *self.mask_fields, *self.domain_fields):
-            if ctx_field is not None and ctx_field not in fields:
-                fields.append(ctx_field)
-        return fields
+    def raw_fields(self, *, include_labels: bool = True) -> list[str]:
+        """Pre-transform source columns; generated columns are omitted."""
+        cols: list[str] = []
+        for setting in self.settings:
+            cols.extend(setting.get_raw_field_names())
+        cols.extend(name for name in (
+            *self.aux_fields, *self.label_fields, *self.mask_fields,
+            *self.domain_fields, self.time_field,
+        ) if name)
+        deduped = list(dict.fromkeys(cols))
+        if not include_labels:
+            label_set = set(self.label_fields)
+            deduped = [name for name in deduped if name not in label_set]
+        return deduped
+
+    def get_formatters(self) -> dict[str, ColumnFormatter]:
+        """Compile feature, supervision and auxiliary conversion rules."""
+        formatters: dict[str, ColumnFormatter] = {}
+        for setting in self.settings:
+            formatters.update(setting.get_formatters())
+        for spec in self._label_specs.values():
+            if spec is None:
+                continue
+            for col, fmt in spec.get_formatters().items():
+                if col == spec.field_name:
+                    formatters[col] = fmt
+                else:
+                    formatters.setdefault(col, fmt)
+        for spec in self._aux_specs.values():
+            formatters.update(spec.get_formatters())
+        return formatters
 
 
 # ==========================================

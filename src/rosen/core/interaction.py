@@ -1,3 +1,4 @@
+"""Batch container mapping field names to tensors with a leading batch dimension."""
 # @Time   : 2020/7/10
 # @Author : Yupeng Hou
 # @Email  : houyupeng@ruc.edu.cn
@@ -17,7 +18,6 @@ import pandas as pd
 import torch
 import torch.nn.utils.rnn as rnn_utils
 
-# 他只是对齐......
 def _convert_to_tensor(data):
     """
     增强版转换函数：完美兼容 uint32 并自动对齐 PyTorch 常用类型。
@@ -62,60 +62,7 @@ def _convert_to_tensor(data):
 
 
 class Interaction(object):
-    """The basic class representing a batch of interaction records.
-
-    Note:
-        While training, there is no strict rules for data in one Interaction object.
-
-        While testing, it should be guaranteed that all interaction records of one single
-        user will not appear in different Interaction object, and records of the same user
-        should be continuous. Meanwhile, the positive cases of one user always need to occur
-        **earlier** than this user's negative cases.
-
-        A correct example:
-            =======     =======     =======
-            user_id     item_id     label
-            =======     =======     =======
-            1           2           1
-            1           6           1
-            1           3           1
-            1           1           0
-            2           3           1
-            ...         ...         ...
-            =======     =======     =======
-
-        Some wrong examples for Interaction objects used in testing:
-
-        1.
-            =======     =======     =======     ============
-            user_id     item_id     label
-            =======     =======     =======     ============
-            1           2           1
-            1           6           0           # positive cases of one user always need to
-
-                                                occur earlier than this user's negative cases
-            1           3           1
-            1           1           0
-            2           3           1
-            ...         ...         ...
-            =======     =======     =======     ============
-
-        2.
-            =======     =======     =======     ========
-            user_id     item_id     label
-            =======     =======     =======     ========
-            1           2           1
-            1           6           1
-            1           3           1
-            2           3           1           # records of the same user should be continuous.
-            1           1           0
-            ...         ...         ...
-            =======     =======     =======     ========
-
-    Attributes:
-        interaction (dict or pandas.DataFrame): keys are meaningful str (also can be called field name),
-            and values are Torch Tensor of numpy Array with shape (batch_size, \\*).
-    """
+    """Dict-like tensor batch with row slicing, device transfer and collation."""
 
     def __init__(self, interaction):
         self.interaction = dict()
@@ -154,12 +101,14 @@ class Interaction(object):
     def __getitem__(self, index):
         if isinstance(index, str):
             return self.interaction[index]
-        if isinstance(index, (np.ndarray, torch.Tensor)):
-            index = index.tolist()
-
+        if isinstance(index, np.ndarray):
+            index = torch.as_tensor(np.ascontiguousarray(index.astype(np.int64) if index.dtype == np.uint32 else index))
+        if isinstance(index, torch.Tensor) and index.dtype == torch.uint8:
+            index = index.bool()
         ret = {}
-        for k in self.interaction:
-            ret[k] = self.interaction[k][index]
+        for k, tensor in self.interaction.items():
+            local_index = index.to(tensor.device) if isinstance(index, torch.Tensor) else index
+            ret[k] = tensor[local_index]
         return Interaction(ret)
 
     def __setitem__(self, key, value):

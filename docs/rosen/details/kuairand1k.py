@@ -28,7 +28,7 @@ from rosen.emb.schema import SparseEmbSetting, MultiSparseSetting
 from rosen.emb import SchemaManager
 import polars as pl
 from rosen.core.enum_type import FeatureSource
-from rosen.evaluate.evaluator import Evaluator
+from rosen.evaluate.evaluator import PointwiseEvaluator
 
 from rosen.evaluate.manager import EvaluatorManager, DomainFilter
 from rosen.experiment.param import ConfigBase, ParamManager
@@ -224,11 +224,11 @@ if __name__ == '__main__':
             log_path=WORKDIR / cfg.log_name,
             title=cfg.experiment_name,
         )
-        evaluator_manager.register("overall", Evaluator("auc", "gauc"))
+        evaluator_manager.register("overall", PointwiseEvaluator("auc", "gauc"))
         for domain in range(num_domains):
             evaluator_manager.register(
                 f"domain{domain}",
-                Evaluator("auc", "gauc"),
+                PointwiseEvaluator("auc", "gauc"),
                 filter_fn=DomainFilter(manager.domain_field, domain),
             )
 

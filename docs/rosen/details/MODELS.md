@@ -1,5 +1,9 @@
 # models/
 
+列表重排子包 `rosen.models.rerank` 的模型与独立注册入口见 [RERANK](RERANK.md)。
+其 `MultiGERerankModel` 复用 BaseModel、Trainer 与评估路由，通过配置选择三生成器、
+Cosine、LC 或可微 LC；不并入下方多场景模型注册表。
+
 `models/` 是当前仓库最宽的模块。真正有训练入口意义的，主要是 `BaseModel`、`MSRModel`、`MODEL_REGISTRY`、`DomainTowerHead` 和一批多场景模型实现。
 
 ## 1. 基础模型
@@ -38,6 +42,36 @@ class MSRModel(BaseModel):
 - `self.DOMAIN = self.manager.domain_field`
 - `self.LABEL = self.manager.label_field`
 - `self.input_view = self.omni_embedding.whole`
+
+### 训练 logits 与预测概率
+
+所有内置 MSR 注册变体以及 `models/unified/` 的单任务 CTR 模型采用同一边界：
+
+```python
+raw = model.logits(interaction)       # Tensor[B]，未归一化，供训练/诊断
+probabilities = model.predict(interaction)  # Tensor[B]，等于 raw.sigmoid()
+```
+
+子类实现 `logits(interaction)`，基类 MSRModel 只实现一次 `predict`。
+单任务模型不需要构造 Prediction；Trainer 在统一评估边界包装 Tensor 并绑定 model.LABEL。
+需要多头、最终排列或附加输出的模型才显式返回 Prediction。
+
+训练损失不调用 predict。带辅助损失的模型保留原有 `_forward_dict`/标签条件路径，
+避免重复 forward 或丢失辅助项。Crocodile 与 HAMUR 保留原来的概率 BCE；HAMUR 也保留
+clamp 语义，但直接从 logits 生成概率计算损失，绝不再依赖预测接口。
+HAMUR 底层网络已在最终 sigmoid 之前输出 raw logits；MLP/DCN/WideDeep 及 adapter 开关均覆盖。
+forward 的参数签名仍由具体骨干定义；`logits(interaction)` 是统一的 Interaction 入口。
+
+迁移外部代码时：原先 `BCEWithLogits(model.predict(inter), y)` 改成 `model.logits(inter)`；
+原先对 predict 结果再 sigmoid 的代码要删除额外 sigmoid。旧 checkpoint 的参数名与形状不变，
+但大多数 MSR 的 predict 从 raw logits 改为概率，因此历史直接消费 predict 的脚本需核对口径。
+
+同样适用于 MixFormer、SASRec、RankMixer、TokenMixer、HyFormer、HeadedCTR 和 UniRank 系列，
+包括额外 logit 分支的子类；这些模型继续继承 MSRModel 的概率预测接口。
+`ObservationAuditWorkflow` 要求显式提供 logits(interaction)，直接读取原始分后计算一次 sigmoid。
+
+`models/generative/` 的 GAN、扩散及 scaler 是生成/变换组件，不属于二元打分接口；
+它们的 forward/sample/denoise 不添加 sigmoid 或 Prediction 包装。
 
 ### `from_manager()`
 

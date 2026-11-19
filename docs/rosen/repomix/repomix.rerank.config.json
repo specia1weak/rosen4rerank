@@ -1,0 +1,50 @@
+{
+  "output": {
+    "filePath": "docs/rosen/repomix/kr1k-rerank.md",
+    "style": "markdown",
+    "parsableStyle": true,
+    "headerText": "新示例二：KR1K 六视频一屏 MultiGE 长播重排。完整实验与 rerank 模型组件；第一阶段冻结先验代码一并保留。 先读 docs/rosen/repomix/examples/kr1k-rerank.md。附件为阅读包，运行请使用仓库源文件路径。",
+    "fileSummary": true,
+    "directoryStructure": true,
+    "removeComments": false,
+    "removeEmptyLines": false,
+    "compress": false,
+    "git": {
+      "sortByChanges": false
+    }
+  },
+  "include": [
+    "docs/rosen/repomix/examples/kr1k-rerank.md",
+    "docs/rosen/repomix/repomix.rerank.config.json",
+    "docs/rosen/repomix/README.md",
+    "workspace/kr_time_budget/run_architecture_examples.py",
+    "workspace/kr_time_budget/pipeline/architecture_examples.py",
+    "workspace/kr_time_budget/pipeline/prepare_architecture_examples.py",
+    "workspace/kr_time_budget/pipeline/run_architecture_examples.py",
+    "workspace/kr_time_budget/tests/test_architecture_examples.py",
+    "workspace/kr_time_budget/回复/新架构示例/用法.md",
+    "workspace/kr_time_budget/回复/新架构示例/实验报告.md",
+    "src/rosen/datasets/kuairand.py",
+    "src/rosen/models/rerank/**/*.py",
+    "docs/rosen/details/RERANK.md",
+    "tests/rosen/models/rerank/*.py",
+    "workspace/kr_time_budget/回复/新架构示例/Prediction迁移.md",
+    "workspace/kr_time_budget/回复/新架构示例/verify_prediction_contract.py"
+  ],
+  "ignore": {
+    "useGitignore": false,
+    "useDotIgnore": false,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "**/__pycache__/**",
+      "**/*.pyc",
+      "**/.DS_Store",
+      "docs/rosen/repomix/rosen-core.md",
+      "docs/rosen/repomix/kr1k-*.md",
+      "docs/rosen/repomix/manifest.json"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}

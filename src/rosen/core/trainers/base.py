@@ -62,6 +62,8 @@ class BaseTrainer:
 
         self.epoch = 0
         self.global_step = 0
+        self.best_checkpoint_path: Path | None = None
+        self.last_checkpoint_path: Path | None = None
         self.last_evaluation_feedback: EvaluationFeedback | None = None
 
     def _timed(self, name: str):
@@ -119,6 +121,9 @@ class BaseTrainer:
         save_path = save_dir / filename
 
         torch.save(self._checkpoint_payload(metrics), save_path)
+        self.last_checkpoint_path = save_path
+        if tag == "best":
+            self.best_checkpoint_path = save_path
         return save_path
 
     def load_checkpoint(self, path: Union[str, Path], *, map_location=None) -> dict:
@@ -216,7 +221,7 @@ class BaseTrainer:
             self.epoch += 1
 
     @torch.no_grad()
-    def _evaluate_loader(self, model, loader):
+    def _evaluate_loader(self, model, loader, *, stage="valid"):
         if loader is None or self.evaluator is None:
             return None
 
@@ -229,7 +234,7 @@ class BaseTrainer:
                 scores = model.predict(batch_interaction)
             self.evaluator.collect(batch_interaction, as_prediction(scores, target=model.LABEL))
 
-        metrics_result = self.evaluator.summary(self.epoch)
+        metrics_result = self.evaluator.summary(epoch=self.epoch, step=self.global_step, stage=stage)
         self.evaluator.clear()
         return metrics_result
 
@@ -244,7 +249,7 @@ class BaseTrainer:
     @torch.no_grad()
     def evaluate_test(self):
         with self._timed("test_epoch"):
-            return self._evaluate_loader(self.model, self.test_loader)
+            return self._evaluate_loader(self.model, self.test_loader, stage="test")
 
     def run(
             self,
@@ -260,9 +265,10 @@ class BaseTrainer:
             metrics = self.evaluate_epoch()
             last_metrics = metrics
             print(metrics)
+            target_key = getattr(self.model, "LABEL", None) or "default"
             feedback = self.last_evaluation_feedback or EvaluationFeedback(
-                metrics_by_target={"student": metrics},
-                primary_target="student",
+                metrics_by_target={target_key: metrics},
+                primary_target=target_key,
                 primary_metrics=metrics,
             )
             should_stop = bool(

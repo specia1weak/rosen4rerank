@@ -11,8 +11,9 @@ import pyarrow.parquet as pq
 import torch
 from torch.utils.data import IterableDataset
 
+from rosen.core.formatters import ColumnFormatter
 from rosen.emb import SchemaManager
-from .padding import ColumnFormatter, FeatureContext, TensorFormatter
+from .padding import FeatureContext, TensorFormatter
 
 
 ScannerSource = Union[str, Path, Sequence[Union[str, Path]], pl.LazyFrame]
